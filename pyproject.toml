@@ -1,0 +1,31 @@
+[project]
+name = "dedupe"
+version = "0.1.0"
+description = "Duplicate file finder and reporter for Synology DiskStation volumes"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "jinja2>=3.1",
+    "typer>=0.12",
+    "pillow>=10.4",
+    "pillow-heif>=0.18",
+    "imagehash>=4.3",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+dedupe = "app.cli:app"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["templates/*.html", "static/*"]

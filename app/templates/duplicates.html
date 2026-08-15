@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}dedupe — exact duplicates{% endblock %}
+{% block content %}
+<h1>Exact duplicates ({{ groups|length }} groups)</h1>
+
+{% for group in groups %}
+<div class="group">
+  <div class="group-header">
+    {{ group.files|length }} copies &mdash; {{ "%.1f"|format(group.files[0].size / (1024**2)) }} MB each
+  </div>
+  <table>
+    <tr><th>Path</th><th></th></tr>
+    {% for f in group.files %}
+    <tr class="{{ 'staged' if f.staged else '' }}">
+      <td class="path">{{ f.path }}</td>
+      <td>
+        {% if not f.staged %}
+        <form method="post" action="/stage/{{ f.id }}" style="display:inline">
+          <input type="hidden" name="return_to" value="/duplicates">
+          <button class="danger" onclick="return confirm('Move this file to the staging folder?')">Stage</button>
+        </form>
+        {% else %}staged{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% else %}
+<p class="muted">No exact duplicates found yet — run a scan first.</p>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}dedupe — dashboard{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+<p class="muted">Scanning: {{ roots|join(", ") }}</p>
+
+<div style="margin: 1.5rem 0;">
+  <div class="stat"><b>{{ exact_count }}</b><span class="muted">exact-duplicate groups</span></div>
+  <div class="stat"><b>{{ similar_count }}</b><span class="muted">similar-image groups</span></div>
+  <div class="stat"><b>{{ "%.1f"|format(reclaimable_gb) }} GB</b><span class="muted">reclaimable</span></div>
+</div>
+
+{% if latest_scan %}
+<p class="muted">
+  Last scan: {{ latest_scan.status }}
+  {% if latest_scan.finished_at %}(finished {{ latest_scan.finished_at }}){% endif %}
+  &mdash; {{ latest_scan.files_seen }} files
+  {% if latest_scan.error %}<br><span style="color:#c44">{{ latest_scan.error }}</span>{% endif %}
+</p>
+{% else %}
+<p class="muted">No scans yet.</p>
+{% endif %}
+
+<form method="post" action="/scan">
+  <button {% if scan_running %}disabled{% endif %}>
+    {% if scan_running %}Scan running…{% else %}Start scan{% endif %}
+  </button>
+</form>
+{% if scan_running %}
+<p class="muted">This page doesn't auto-refresh — reload to check progress, or poll <span class="path">GET /scan/status</span>.</p>
+{% endif %}
+{% endblock %}

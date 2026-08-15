@@ -1,0 +1,45 @@
+services:
+  dedupe:
+    build: .
+    image: dedupe:local
+    container_name: dedupe
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Colon-separated list of paths *as seen inside the container* (see
+      # the matching volume mounts below) — not the host paths.
+      SCAN_ROOTS: "/data/photos:/data/documents"
+      WORKERS: "4"
+      PHASH_THRESHOLD: "5"
+      # Comparison mode: mount points the folder picker (GET /api/browse)
+      # is allowed to show. Read-only browsing — this doesn't grant write
+      # access, WRITABLE_ROOTS below does that separately.
+      BROWSE_ROOTS: "/data/photos:/data/documents:/data/compare-target"
+      # Comparison mode's target root must resolve inside here to be
+      # copyable to. Empty/unset refuses all copies. Keep this scoped to
+      # exactly the mount(s) meant to receive copies, not the whole NAS.
+      WRITABLE_ROOTS: "/data/compare-target"
+    volumes:
+      # Source folders: read-only. The app must never be able to write to
+      # what it's scanning.
+      - /volume1/photos:/data/photos:ro
+      - /volume1/documents:/data/documents:ro
+      # Comparison mode's target: writable, since copying missing files here
+      # is the one deliberate exception to the read-only rule. The app
+      # enforces additive-only writes confined to this path at the
+      # application level (see WRITABLE_ROOTS) — this mount just can't be
+      # :ro, since comparison mode picks its target at runtime and it may
+      # not be this exact folder.
+      - /volume1/backup-target:/data/compare-target
+      # SQLite index — persists across container restarts/rebuilds.
+      - /volume1/docker/dedupe/config:/config
+      # Where "stage" moves files to instead of deleting them.
+      - /volume1/docker/dedupe/staging:/staging
+    # DS923+'s R1600 is 2C/4T — leave headroom for DSM and other packages.
+    # Honored by Container Manager / Compose V2 without Swarm.
+    deploy:
+      resources:
+        limits:
+          cpus: "3.0"
+          memory: 4g

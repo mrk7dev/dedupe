@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}dedupe — similar images{% endblock %}
+{% block content %}
+<h1>Similar images ({{ groups|length }} groups)</h1>
+<p class="muted">Perceptual matches are probabilistic — review each group before staging anything.</p>
+
+{% for group in groups %}
+<div class="group">
+  <div class="group-header">
+    {{ group.files|length }} images &mdash; max hamming distance {{ group.score }}
+  </div>
+  <table>
+    <tr><th>Path</th><th>Size</th><th></th></tr>
+    {% for f in group.files %}
+    <tr class="{{ 'staged' if f.staged else '' }}">
+      <td class="path">{{ f.path }}</td>
+      <td>{{ "%.1f"|format(f.size / (1024**2)) }} MB</td>
+      <td>
+        {% if not f.staged %}
+        <form method="post" action="/stage/{{ f.id }}" style="display:inline">
+          <input type="hidden" name="return_to" value="/similar">
+          <button class="danger" onclick="return confirm('Move this file to the staging folder?')">Stage</button>
+        </form>
+        {% else %}staged{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% else %}
+<p class="muted">No similar-image groups found yet — run a scan first.</p>
+{% endfor %}
+{% endblock %}
