@@ -37,9 +37,11 @@ services:
       # Where "stage" moves files to instead of deleting them.
       - /volume1/docker/dedupe/staging:/staging
     # DS923+'s R1600 is 2C/4T — leave headroom for DSM and other packages.
-    # Honored by Container Manager / Compose V2 without Swarm.
+    # No CPU limit here: DSM's kernel doesn't have the CPU CFS bandwidth
+    # cgroup controller enabled, so `cpus:` fails outright ("NanoCPUs can
+    # not be set..."). WORKERS above is what actually bounds CPU usage —
+    # keep it modest instead. Memory limit is unaffected and still applies.
     deploy:
       resources:
         limits:
-          cpus: "3.0"
           memory: 4g
