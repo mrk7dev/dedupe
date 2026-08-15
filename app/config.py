@@ -42,14 +42,32 @@ IMAGE_EXTENSIONS = {
 
 # --- Volume/Folder Comparison Mode ---
 
-# Mount points offered by the folder picker (GET /api/browse). Distinct from
-# SCAN_ROOTS: either side of a comparison can be any folder under here, not
-# just the fixed roots single-volume dedup scans.
-BROWSE_ROOTS = _split_paths(
-    os.environ.get("BROWSE_ROOTS", "/volume1:/volume2:/volume3:/volumeUSB1:/volumeUSB2")
-)
 
-# Comparison mode's one deliberate exception to "never write to source data":
-# a compare run's target root must resolve inside one of these to be copyable
-# to. Empty by default — copying is refused until explicitly configured.
-WRITABLE_ROOTS = _split_paths(os.environ.get("WRITABLE_ROOTS", ""))
+def _default_volume_candidates() -> list[str]:
+    """Synology's stable, predictable top-level mount-point naming convention."""
+    return [f"/volume{i}" for i in range(1, 13)] + [f"/volumeUSB{i}" for i in range(1, 7)]
+
+
+def discover_browse_roots(candidates: list[str] | None = None, extra: str = "") -> list[Path]:
+    """Mount points offered by the folder picker (GET /api/browse). Distinct
+    from SCAN_ROOTS: either side of a comparison can be any folder under
+    here, not just the fixed roots single-volume dedup scans.
+
+    Auto-discovers from `candidates` (default: well-known Synology mount
+    patterns) by checking which actually exist as directories inside the
+    container — i.e. which were bind-mounted — so adding a new volume is a
+    one-line docker-compose.yml change, not a matching env var edit too.
+    `extra` (colon-separated) adds non-standard mount names on top; it does
+    NOT replace the auto-discovered list.
+    """
+    if candidates is None:
+        candidates = _default_volume_candidates()
+    found = [Path(c).resolve() for c in candidates if Path(c).is_dir()]
+    for p in _split_paths(extra):
+        p = p.resolve()
+        if p not in found:
+            found.append(p)
+    return found
+
+
+BROWSE_ROOTS = discover_browse_roots(extra=os.environ.get("BROWSE_ROOTS", ""))

@@ -7,40 +7,45 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # Colon-separated list of paths *as seen inside the container* (see
-      # the matching volume mounts below) — not the host paths.
-      SCAN_ROOTS: "/data/photos:/data/documents"
+      # Single-volume dedup mode (legacy dashboard, /legacy) still scans
+      # exactly these paths — unrelated to the whole-volume mounts below.
+      SCAN_ROOTS: "/volume1/photos:/volume1/documents"
       WORKERS: "4"
       PHASH_THRESHOLD: "5"
-      # Comparison mode: mount points the folder picker (GET /api/browse)
-      # is allowed to show. Read-only browsing — this doesn't grant write
-      # access, WRITABLE_ROOTS below does that separately.
-      BROWSE_ROOTS: "/data/photos:/data/documents:/data/compare-target"
-      # Comparison mode's target root must resolve inside here to be
-      # copyable to. Empty/unset refuses all copies. Keep this scoped to
-      # exactly the mount(s) meant to receive copies, not the whole NAS.
-      WRITABLE_ROOTS: "/data/compare-target"
+      # Comparison mode's browse roots (GET /api/browse, folder picker) are
+      # auto-discovered from whichever /volumeN or /volumeUSBn mounts below
+      # actually exist inside the container — no env var needed for the
+      # common case. This ADDS a non-standard mount name on top of the
+      # auto-discovered ones (it no longer replaces them, unlike before):
+      # BROWSE_ROOTS: "/some-other-mount-name"
     volumes:
-      # Source folders: read-only. The app must never be able to write to
-      # what it's scanning.
-      - /volume1/photos:/data/photos:ro
-      - /volume1/documents:/data/documents:ro
-      # Comparison mode's target: writable, since copying missing files here
-      # is the one deliberate exception to the read-only rule. The app
-      # enforces additive-only writes confined to this path at the
-      # application level (see WRITABLE_ROOTS) — this mount just can't be
-      # :ro, since comparison mode picks its target at runtime and it may
-      # not be this exact folder.
-      - /volume1/backup-target:/data/compare-target
-      # SQLite index — persists across container restarts/rebuilds.
-      - /volume1/docker/dedupe/config:/config
-      # Where "stage" moves files to instead of deleting them.
-      - /volume1/docker/dedupe/staging:/staging
-    # DS923+'s R1600 is 2C/4T — leave headroom for DSM and other packages.
-    # No CPU limit here: DSM's kernel doesn't have the CPU CFS bandwidth
-    # cgroup controller enabled, so `cpus:` fails outright ("NanoCPUs can
-    # not be set..."). WORKERS above is what actually bounds CPU usage —
-    # keep it modest instead. Memory limit is unaffected and still applies.
+      # One entry per physical volume/drive dedupe should be able to see at
+      # all. Host path == container path deliberately (no /data/... alias)
+      # so paths shown in the UI and stored in the DB match the NAS's real
+      # paths.
+      #
+      # Per-volume choice, made once here:
+      #   :ro        -> browsable only, never a valid comparison-mode copy
+      #                 target (the safe default for source/archival data)
+      #   (no :ro)   -> browsable AND selectable as a copy target — still
+      #                 additive-only at the app level, never overwrites or
+      #                 deletes existing files. Whether a volume is a valid
+      #                 copy target is driven entirely by this flag — there's
+      #                 no separate allowlist to also keep in sync.
+      #
+      # New volume/drive later = one line here + `docker compose up -d`
+      # (restart required — Docker only sees mounts present at container
+      # start; a drive attached while the container is already running
+      # needs a restart to become visible).
+      - /volume1:/volume1:ro
+      - /volume2:/volume2
+      - /volumeUSB1:/volumeUSB1:ro
+      # SQLite index and staging folder. Housed under a dot-prefixed folder
+      # name (.dedupe) so they don't ALSO show up as regular browsable
+      # folders via the /volume1 mount above — app/browse.py already
+      # filters dot-prefixed entries out of the picker.
+      - /volume1/docker/.dedupe/config:/config
+      - /volume1/docker/.dedupe/staging:/staging
     deploy:
       resources:
         limits:

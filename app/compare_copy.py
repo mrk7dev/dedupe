@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, db
+from . import browse, db
 
 
 def _now() -> str:
@@ -13,8 +14,15 @@ def _now() -> str:
 
 
 def _assert_writable(root: Path) -> None:
-    if not any(root == w or w in root.parents for w in config.WRITABLE_ROOTS):
-        raise PermissionError(f"{root} is outside the configured writable roots")
+    """A copy target must be a currently-discovered browse root (or under
+    one) AND actually OS-writable. Writability is driven entirely by
+    whichever volumes were mounted read-write in docker-compose.yml — no
+    separate allowlist to keep in sync with that choice.
+    """
+    if not browse.is_under_browse_roots(root):
+        raise PermissionError(f"{root} is outside the configured browse roots")
+    if not os.access(root, os.W_OK):
+        raise PermissionError(f"{root} is not writable (read-only mount)")
 
 
 def _unique_dest(dest: Path) -> Path:
@@ -45,7 +53,6 @@ def copy_selected(run_id: int, compare_file_ids: list[int]) -> None:
 
         source_root = Path(run["source_root"]).resolve()
         target_root = Path(run["target_root"]).resolve()
-        _assert_writable(target_root)
 
         placeholders = ",".join("?" * len(compare_file_ids))
         rows = conn.execute(
@@ -62,8 +69,13 @@ def copy_selected(run_id: int, compare_file_ids: list[int]) -> None:
         )
         conn.commit()
 
+    # _assert_writable runs *after* copy_phase is set to 'running', not
+    # before — so a failure here still lands in the except block below and
+    # reports 'error' with a message, instead of leaving copy_phase stuck at
+    # its initial null forever (a poller watching /copy/status would hang).
     done = 0
     try:
+        _assert_writable(target_root)
         with db.connection() as conn:
             for row in rows:
                 _copy_one(conn, source_root, target_root, row)

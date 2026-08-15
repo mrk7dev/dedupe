@@ -41,7 +41,9 @@ def list_roots() -> list[Entry]:
     ]
 
 
-def _is_under_browse_roots(path: Path) -> bool:
+def is_under_browse_roots(path: Path) -> bool:
+    """Shared containment check — also used by compare_copy.py and api.py so
+    there's exactly one definition of "inside a configured browse root"."""
     return any(path == root or root in path.parents for root in config.BROWSE_ROOTS)
 
 
@@ -56,8 +58,8 @@ def list_children(path: str | None) -> list[Entry]:
     if path is None:
         return list_roots()
 
-    target = Path(path)
-    if not _is_under_browse_roots(target):
+    target = Path(path).resolve()
+    if not is_under_browse_roots(target):
         raise PermissionError(f"{path} is outside the configured browse roots")
     if not target.is_dir():
         raise NotADirectoryError(path)

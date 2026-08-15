@@ -134,12 +134,16 @@ def start_compare(body: CompareStartRequest, background_tasks: BackgroundTasks):
     if _compare_running is not None:
         raise HTTPException(409, "a comparison is already running")
 
-    source = Path(body.source_root)
-    target = Path(body.target_root)
+    source = Path(body.source_root).resolve()
+    target = Path(body.target_root).resolve()
     if not source.is_dir():
         raise HTTPException(400, f"source root does not exist: {source}")
     if not target.is_dir():
         raise HTTPException(400, f"target root does not exist: {target}")
+    if not browse.is_under_browse_roots(source):
+        raise HTTPException(403, f"source root is outside the configured browse roots: {source}")
+    if not browse.is_under_browse_roots(target):
+        raise HTTPException(403, f"target root is outside the configured browse roots: {target}")
 
     run_id = compare.create_run(str(source), str(target))
     _compare_running = run_id

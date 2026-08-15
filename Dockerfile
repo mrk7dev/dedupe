@@ -24,6 +24,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends libjpeg62-turbo
 COPY --from=build /install /usr/local
 COPY --from=frontend-build /frontend/dist /app/static
 
+# BROWSE_ROOTS (comparison mode) has no default here on purpose — it's
+# auto-discovered at runtime from whichever /volumeN or /volumeUSBn mounts
+# exist in the container (see app/config.py), not env-defaulted.
 ENV SCAN_ROOTS=/data \
     DB_PATH=/config/dedupe.db \
     STAGING_DIR=/staging \
