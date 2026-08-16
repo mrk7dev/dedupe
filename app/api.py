@@ -144,6 +144,11 @@ def start_compare(body: CompareStartRequest, background_tasks: BackgroundTasks):
         raise HTTPException(403, f"source root is outside the configured browse roots: {source}")
     if not browse.is_under_browse_roots(target):
         raise HTTPException(403, f"target root is outside the configured browse roots: {target}")
+    try:
+        compare.check_readable(source)
+        compare.check_readable(target)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
 
     run_id = compare.create_run(str(source), str(target))
     _compare_running = run_id

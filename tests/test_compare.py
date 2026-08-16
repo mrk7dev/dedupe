@@ -54,6 +54,32 @@ def test_matched_source_only_target_only_categorized(env):
     assert "shared_renamed.bin" not in by_name
 
 
+def test_run_compare_errors_clearly_when_target_unreadable(env):
+    # Regression: os.walk silently skips a directory it can't scandir —
+    # including the root itself — instead of raising. Without an explicit
+    # readability check, an unreadable target root walked as 0 files and
+    # every source file was then (wrongly, silently) reported as missing
+    # from target, instead of the run surfacing a clear permission error.
+    source, target = env["source"], env["target"]
+    (source / "a.bin").write_bytes(b"payload")
+    (target / "a.bin").write_bytes(b"payload")
+
+    target.chmod(0o000)
+    try:
+        db.init_db()
+        run_id = compare.create_run(str(source), str(target))
+        with pytest.raises(PermissionError):
+            compare.run_compare(run_id, str(source), str(target))
+
+        with db.connection() as conn:
+            run = conn.execute("SELECT phase, error FROM compare_runs WHERE id = ?", (run_id,)).fetchone()
+        assert run["phase"] == "error"
+        assert run["error"] is not None
+        assert str(target) in run["error"]
+    finally:
+        target.chmod(0o755)  # restore so pytest's tmp_path cleanup can remove it
+
+
 def test_same_size_different_content_not_matched(env):
     source, target = env["source"], env["target"]
     (source / "a.bin").write_bytes(b"AAAA" * 100)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from collections import defaultdict
@@ -9,9 +10,32 @@ from datetime import datetime, timezone
 
 from . import config, db, hashing
 
+logger = logging.getLogger(__name__)
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def check_readable(root: str) -> None:
+    """os.walk silently skips any directory it can't scandir — including the
+    root itself — instead of raising. Without this check, a target root the
+    container's user lacks read permission on walks as 0 files and every
+    source file is then (wrongly, silently) reported as missing from target.
+    """
+    try:
+        with os.scandir(root):
+            pass
+    except OSError as exc:
+        raise PermissionError(f"cannot read directory {root}: {exc.strerror or exc}") from exc
+
+
+def _log_walk_error(exc: OSError) -> None:
+    """os.walk's default onerror=None silently drops unreadable subdirectories
+    mid-walk too — log them so a partial scan is at least visible in the
+    container logs instead of just quietly under-counting.
+    """
+    logger.warning("skipping unreadable path during compare walk: %s", exc)
 
 
 @dataclass
@@ -26,7 +50,7 @@ class WalkedFile:
 
 def _count_files(root: str) -> int:
     total = 0
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(root, onerror=_log_walk_error, followlinks=False):
         dirnames[:] = [d for d in dirnames if d not in config.EXCLUDE_DIRS]
         total += len(filenames)
     return total
@@ -34,7 +58,7 @@ def _count_files(root: str) -> int:
 
 def _walk_side(root: str, side: str) -> list[WalkedFile]:
     found: list[WalkedFile] = []
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(root, onerror=_log_walk_error, followlinks=False):
         dirnames[:] = [d for d in dirnames if d not in config.EXCLUDE_DIRS]
         for name in filenames:
             full_path = os.path.join(dirpath, name)
@@ -73,6 +97,8 @@ def create_run(source_root: str, target_root: str) -> int:
 
 def run_compare(run_id: int, source_root: str, target_root: str) -> None:
     try:
+        check_readable(source_root)
+        check_readable(target_root)
         total = _count_files(source_root) + _count_files(target_root)
         with db.connection() as conn:
             _set_progress(conn, run_id, phase="scanning", files_total=total, files_done=0)

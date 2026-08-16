@@ -40,6 +40,25 @@ def test_compare_start_rejects_root_outside_browse_roots(client):
     assert res.status_code == 403
 
 
+def test_compare_start_rejects_unreadable_target(client):
+    # Regression: an unreadable target mount previously passed all the
+    # /compare/start checks (is_dir() only needs execute on the parent, not
+    # read on the target itself) and only failed silently deep inside the
+    # background walk, reporting every source file as "missing" instead of
+    # a clear permission error.
+    c, paths = client
+    paths["target"].chmod(0o000)
+    try:
+        res = c.post(
+            "/compare/start",
+            json={"source_root": str(paths["source"]), "target_root": str(paths["target"])},
+        )
+        assert res.status_code == 403
+        assert str(paths["target"]) in res.json()["detail"]
+    finally:
+        paths["target"].chmod(0o755)
+
+
 def test_compare_start_rejects_nonexistent_root(client):
     c, paths = client
     missing = paths["tmp_path"] / "does-not-exist"
