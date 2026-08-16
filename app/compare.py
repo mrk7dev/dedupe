@@ -4,6 +4,7 @@ import logging
 import os
 import sqlite3
 from collections import defaultdict
+from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -71,27 +72,45 @@ class WalkedFile:
     mtime: float
 
 
-def _count_files(roots: list[str]) -> int:
-    total = 0
-    for root in roots:
-        for dirpath, dirnames, filenames in os.walk(root, onerror=_log_walk_error, followlinks=False):
-            dirnames[:] = [d for d in dirnames if d not in config.EXCLUDE_DIRS]
-            total += len(filenames)
-    return total
+def _iter_entries(root: str) -> Iterator[tuple[str, os.DirEntry]]:
+    """Single recursive scandir walk, replacing the old separate count+walk
+    passes (which each re-listed every directory) and os.walk's own separate
+    per-file os.stat() call. Yields (dirpath, DirEntry) so callers can use
+    DirEntry.stat(), served from the same scandir data on most platforms
+    instead of a second stat syscall per file. Mirrors os.walk's semantics:
+    EXCLUDE_DIRS pruned, symlinked directories listed but not descended into.
+    """
+    stack = [root]
+    while stack:
+        dirpath = stack.pop()
+        try:
+            entries = os.scandir(dirpath)
+        except OSError as exc:
+            _log_walk_error(exc)
+            continue
+        with entries:
+            for entry in entries:
+                try:
+                    is_dir = entry.is_dir()
+                except OSError as exc:
+                    _log_walk_error(exc)
+                    continue
+                if is_dir:
+                    if entry.name not in config.EXCLUDE_DIRS and not entry.is_symlink():
+                        stack.append(entry.path)
+                else:
+                    yield dirpath, entry
 
 
 def _walk_side(roots: list[str], side: str) -> list[WalkedFile]:
     found: list[WalkedFile] = []
     for root in roots:
-        for dirpath, dirnames, filenames in os.walk(root, onerror=_log_walk_error, followlinks=False):
-            dirnames[:] = [d for d in dirnames if d not in config.EXCLUDE_DIRS]
-            for name in filenames:
-                full_path = os.path.join(dirpath, name)
-                try:
-                    st = os.stat(full_path)
-                except OSError:
-                    continue
-                found.append(WalkedFile(side, dirpath, name, full_path, st.st_size, st.st_mtime))
+        for dirpath, entry in _iter_entries(root):
+            try:
+                st = entry.stat()
+            except OSError:
+                continue
+            found.append(WalkedFile(side, dirpath, entry.name, entry.path, st.st_size, st.st_mtime))
     return found
 
 
@@ -124,9 +143,8 @@ def run_compare(run_id: int, source_roots: list[str], target_roots: list[str], i
     try:
         for root in (*source_roots, *target_roots):
             check_readable(root)
-        total = _count_files(source_roots) + _count_files(target_roots)
         with db.connection() as conn:
-            _set_progress(conn, run_id, phase="scanning", files_total=total, files_done=0)
+            _set_progress(conn, run_id, phase="scanning", files_total=0, files_done=0)
 
         walked: list[WalkedFile] = []
         for roots, side in ((source_roots, "source"), (target_roots, "target")):

@@ -96,6 +96,17 @@ Compare two arbitrary folder trees — **source** and **target**, which may be t
 
 - Extend perceptual/near-duplicate (image) matching to comparison mode — deliberately excluded from v1 to keep the first pass focused on exact-content matching.
 - Bring comparison mode's interactive UI pattern (tree browser, live progress, selectable results) back to single-volume dedup mode for consistency.
+- **Duplicate Detection Mode** — a third mode alongside single-volume dedup and Comparison Mode: finds duplicates *within* an arbitrary set of selected folders (not a source-vs-target comparison).
+  - **Input:** select multiple folders (reuse the multi-folder picker pattern built for Comparison Mode — `FolderSelectButton` + `FolderPickerModal`), which may span multiple volumes/mounts.
+  - **Scanning:** all files under the selected folders are scanned and hashed via the existing staged pipeline (size → partial hash → full hash, `app/hashing.py`) — same approach as both existing modes, not a new algorithm.
+  - **Results UI — two-pane, left/right:**
+    - Left: the list of potential duplicates — one entry per group of files sharing identical content (conceptually close to `app/grouping.py`'s existing `exact_duplicate_groups`, which does this today for single-volume mode's `files` table — would need adapting to a selected multi-folder set rather than the whole configured scan root).
+    - Right: selecting a group on the left shows all of that group's file locations. From there, select one (or more) to move to a **"duplicate for cleanup" staging folder** — a move, not a delete, matching the project's existing "remove = stage, never hard-delete" safety rule.
+  - **Folder-level resolution aid:** a separate list of *folders* where duplicates have been found (path + presumably a duplicate count), letting the user mark folders as **priority (keep)** vs. **lower-priority (move candidates)** — intended to speed up bulk resolution across many duplicate groups by folder-level preference, rather than resolving group-by-group.
+  - **Open questions (unresolved, for future design):**
+    - How a folder's priority marking actually drives action — does it auto-select the non-priority copy in every group touching that folder for the move-to-cleanup action, or just visually suggest it while still requiring per-group confirmation?
+    - Data model: reuse `compare_runs`/`compare_files`-style storage (already schema-flexible via comma-joined roots) vs. a new table — needs a look at `app/grouping.py` and `app/db.py` before deciding.
+    - Relationship to single-volume dedup's existing exact-duplicate detection (`app/grouping.py`, `app/dedupe` CLI path) — likely large overlap in matching logic, worth reusing rather than reimplementing.
 
 ## Non-goals
 

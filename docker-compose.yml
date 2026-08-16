@@ -9,7 +9,7 @@ services:
     environment:
       # Single-volume dedup mode (legacy dashboard, /legacy) still scans
       # exactly these paths — unrelated to the whole-volume mounts below.
-      SCAN_ROOTS: "/volume1/photos:/volume1/documents"
+      SCAN_ROOTS: "/volume1"
       WORKERS: "4"
       PHASH_THRESHOLD: "5"
       # Comparison mode's browse roots (GET /api/browse, folder picker) are
@@ -38,7 +38,6 @@ services:
       # start; a drive attached while the container is already running
       # needs a restart to become visible).
       - /volume1:/volume1:ro
-      - /volume2:/volume2
       - /volumeUSB1:/volumeUSB1:ro
       # SQLite index and staging folder. Housed under a dot-prefixed folder
       # name (.dedupe) so they don't ALSO show up as regular browsable
