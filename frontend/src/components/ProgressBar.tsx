@@ -10,9 +10,15 @@ const PHASE_LABEL: Record<CompareProgress['phase'], string> = {
   cancelled: 'Cancelled',
 }
 
+function splitPath(path: string): { folder: string; name: string } {
+  const idx = path.lastIndexOf('/')
+  return idx === -1 ? { folder: '', name: path } : { folder: path.slice(0, idx), name: path.slice(idx + 1) }
+}
+
 export function ProgressBar({ progress, startedAt }: { progress: CompareProgress; startedAt?: string | null }) {
   const pct =
     progress.filesTotal > 0 ? Math.min(100, Math.round((progress.filesDone / progress.filesTotal) * 100)) : 0
+  const current = progress.currentPath ? splitPath(progress.currentPath) : null
 
   return (
     <div className="rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
@@ -37,6 +43,12 @@ export function ProgressBar({ progress, startedAt }: { progress: CompareProgress
           style={{ width: `${pct}%` }}
         />
       </div>
+      {current && (
+        <div className="mt-1.5 truncate font-mono text-xs text-neutral-500 dark:text-neutral-400">
+          {current.folder && <span className="text-neutral-400 dark:text-neutral-500">{current.folder}/</span>}
+          <span>{current.name}</span>
+        </div>
+      )}
     </div>
   )
 }

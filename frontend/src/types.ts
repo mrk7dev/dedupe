@@ -16,6 +16,7 @@ export interface CompareProgress {
   phase: ComparePhase
   filesTotal: number
   filesDone: number
+  currentPath: string | null
 }
 
 export type MatchCategory = 'matched' | 'source_only' | 'target_only'

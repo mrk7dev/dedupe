@@ -144,6 +144,9 @@ def test_compare_status_includes_roots_and_started_at(client):
     assert data["sourceRoots"] == [str(paths["source"])]
     assert data["targetRoots"] == [str(paths["target"])]
     assert data["startedAt"]
+    # No live "current path" left once TestClient's synchronous background
+    # task has already finished the run by the time we check status.
+    assert data["currentPath"] is None
 
 
 def test_stop_rejects_when_no_run_active(client):

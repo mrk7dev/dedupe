@@ -197,6 +197,7 @@ def compare_status(run_id: int):
         "sourceRoots": row["source_root"].split(","),
         "targetRoots": row["target_root"].split(","),
         "startedAt": row["started_at"],
+        "currentPath": compare.get_current_path(run_id),
     }
 
 

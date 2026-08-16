@@ -14,7 +14,7 @@ import {
 } from '../api'
 import type { CompareFile, CompareProgress, CopyProgress } from '../types'
 
-const IDLE_PROGRESS: CompareProgress = { phase: 'idle', filesTotal: 0, filesDone: 0 }
+const IDLE_PROGRESS: CompareProgress = { phase: 'idle', filesTotal: 0, filesDone: 0, currentPath: null }
 const POLL_MS = 500
 const ACTIVE_RUN_KEY = 'dedupe:activeRunId'
 const ACTIVE_PHASES = new Set(['counting', 'scanning', 'hashing'])
@@ -56,7 +56,12 @@ export function ComparePage() {
     while (!stoppedRef.current) {
       try {
         const status = await getCompareStatus(id)
-        setProgress({ phase: status.phase, filesTotal: status.filesTotal, filesDone: status.filesDone })
+        setProgress({
+          phase: status.phase,
+          filesTotal: status.filesTotal,
+          filesDone: status.filesDone,
+          currentPath: status.currentPath,
+        })
 
         if (status.phase === 'ready') {
           const results = await getCompareResults(id)
@@ -139,7 +144,12 @@ export function ComparePage() {
       setSourceRoots(status.sourceRoots)
       setTargetRoots(status.targetRoots)
       setStartedAt(status.startedAt)
-      setProgress({ phase: status.phase, filesTotal: status.filesTotal, filesDone: status.filesDone })
+      setProgress({
+        phase: status.phase,
+        filesTotal: status.filesTotal,
+        filesDone: status.filesDone,
+        currentPath: status.currentPath,
+      })
 
       if (status.phase === 'ready') {
         try {
@@ -185,7 +195,7 @@ export function ComparePage() {
     setCopyProgress(null)
     setCancelledNotice(null)
     setError(null)
-    setProgress({ phase: 'counting', filesTotal: 0, filesDone: 0 })
+    setProgress({ phase: 'counting', filesTotal: 0, filesDone: 0, currentPath: null })
 
     let id: number
     try {

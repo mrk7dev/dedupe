@@ -29,11 +29,24 @@ class RunCancelled(Exception):
 # existing `_compare_running` global in app/api.py already relies on.
 _cancel_events: dict[int, threading.Event] = {}
 
+# Path most recently seen by the walk or hashing loop, keyed by run_id.
+# Deliberately in-memory only, not persisted to compare_runs — it's a
+# transient "what's it doing right now" hint for the progress bar, not
+# something a reattach needs to survive a process restart, so it avoids
+# needing a schema change (compare_runs already exists on deployed installs;
+# CREATE TABLE IF NOT EXISTS won't add a column to it). Popped once a run
+# reaches a terminal state so a finished run reports no current path.
+_current_path: dict[int, str] = {}
+
 
 def request_cancel(run_id: int) -> None:
     event = _cancel_events.get(run_id)
     if event is not None:
         event.set()
+
+
+def get_current_path(run_id: int) -> str | None:
+    return _current_path.get(run_id)
 
 
 def _now() -> str:
@@ -126,10 +139,11 @@ def _iter_entries(root: str, cancel_event: threading.Event) -> Iterator[tuple[st
                     yield dirpath, entry
 
 
-def _walk_side(roots: list[str], side: str, cancel_event: threading.Event) -> list[WalkedFile]:
+def _walk_side(roots: list[str], side: str, run_id: int, cancel_event: threading.Event) -> list[WalkedFile]:
     found: list[WalkedFile] = []
     for root in roots:
         for dirpath, entry in _iter_entries(root, cancel_event):
+            _current_path[run_id] = entry.path
             try:
                 st = entry.stat()
             except OSError:
@@ -174,7 +188,7 @@ def run_compare(run_id: int, source_roots: list[str], target_roots: list[str], i
 
         walked: list[WalkedFile] = []
         for roots, side in ((source_roots, "source"), (target_roots, "target")):
-            side_files = _walk_side(roots, side, cancel_event)
+            side_files = _walk_side(roots, side, run_id, cancel_event)
             walked.extend(side_files)
             with db.connection() as conn:
                 _set_progress(conn, run_id, files_done=len(walked))
@@ -214,6 +228,7 @@ def run_compare(run_id: int, source_roots: list[str], target_roots: list[str], i
         raise
     finally:
         _cancel_events.pop(run_id, None)
+        _current_path.pop(run_id, None)
 
 
 def _hash_and_categorize(
@@ -261,6 +276,7 @@ def _hash_and_categorize(
                 for row_id, value in pool.map(task_fn, tasks, chunksize=32):
                     results[row_id] = value
                     done += 1
+                    _current_path[run_id] = rows_by_id[row_id]["path"]
                     if value is not None:
                         r = rows_by_id[row_id]
                         pending.append(

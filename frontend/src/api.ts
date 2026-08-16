@@ -24,6 +24,7 @@ interface CompareStatusResponse {
   sourceRoots: string[]
   targetRoots: string[]
   startedAt: string
+  currentPath: string | null
 }
 
 interface CompareResultsResponse {

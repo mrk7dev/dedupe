@@ -235,6 +235,38 @@ def test_stop_cancels_a_running_comparison(env, no_pool):
     assert run_id not in compare._cancel_events  # registry entry cleaned up
 
 
+def test_current_path_tracks_progress_and_clears_when_done(env, no_pool):
+    source, target = env["source"], env["target"]
+    n = 20
+    for i in range(n):
+        content = f"file-{i}-".encode().ljust(1000, b"x")
+        (source / f"s{i}.bin").write_bytes(content)
+        (target / f"t{i}.bin").write_bytes(content)
+
+    real_partial_hash = hashing.partial_hash
+    observed = {"path": None}
+    run_id_holder = {}
+
+    def spying_partial_hash(path, size):
+        observed["path"] = compare.get_current_path(run_id_holder["id"])
+        return real_partial_hash(path, size)
+
+    db.init_db()
+    run_id = compare.create_run([str(source)], [str(target)])
+    run_id_holder["id"] = run_id
+    with mock.patch.object(hashing, "partial_hash", side_effect=spying_partial_hash):
+        compare.run_compare(run_id, [str(source)], [str(target)])
+
+    # Observed from *inside* a mid-run hash call — proves it's actually live,
+    # not just set once at the end.
+    assert observed["path"] is not None
+    assert observed["path"].endswith(".bin")
+
+    # Cleared once the run reaches a terminal state, so a finished run
+    # doesn't keep reporting a stale "currently processing" file.
+    assert compare.get_current_path(run_id) is None
+
+
 def test_run_compare_errors_clearly_when_target_unreadable(env):
     # Regression: os.walk silently skips a directory it can't scandir —
     # including the root itself — instead of raising. Without an explicit
