@@ -13,8 +13,8 @@ const POLL_MS = 500
 type PickerTarget = 'source' | 'target' | null
 
 export function ComparePage() {
-  const [sourceRoot, setSourceRoot] = useState<string | null>(null)
-  const [targetRoot, setTargetRoot] = useState<string | null>(null)
+  const [sourceRoots, setSourceRoots] = useState<string[]>([])
+  const [targetRoots, setTargetRoots] = useState<string[]>([])
   const [pickerTarget, setPickerTarget] = useState<PickerTarget>(null)
   const [runId, setRunId] = useState<number | null>(null)
   const [ignoreCache, setIgnoreCache] = useState(false)
@@ -42,7 +42,7 @@ export function ComparePage() {
   }
 
   async function startComparison() {
-    if (!sourceRoot || !targetRoot) return
+    if (sourceRoots.length === 0 || targetRoots.length === 0) return
     setFiles(null)
     setCopyNotice(null)
     setCopyProgress(null)
@@ -51,7 +51,7 @@ export function ComparePage() {
 
     let id: number
     try {
-      id = await startCompare(sourceRoot, targetRoot, ignoreCache)
+      id = await startCompare(sourceRoots, targetRoots, ignoreCache)
     } catch (err) {
       setProgress(IDLE_PROGRESS)
       setError(errMsg(err))
@@ -142,18 +142,28 @@ export function ComparePage() {
       </div>
 
       <div className="flex flex-col gap-4 sm:flex-row">
-        <FolderSelectButton label="Source" path={sourceRoot} onClick={() => setPickerTarget('source')} />
-        <FolderSelectButton label="Target" path={targetRoot} onClick={() => setPickerTarget('target')} />
+        <FolderSelectButton
+          label="Source"
+          paths={sourceRoots}
+          onAdd={() => setPickerTarget('source')}
+          onRemove={(path) => setSourceRoots((prev) => prev.filter((p) => p !== path))}
+        />
+        <FolderSelectButton
+          label="Target"
+          paths={targetRoots}
+          onAdd={() => setPickerTarget('target')}
+          onRemove={(path) => setTargetRoots((prev) => prev.filter((p) => p !== path))}
+        />
       </div>
 
       {pickerTarget && (
         <FolderPickerModal
-          title={pickerTarget === 'source' ? 'Select source folder' : 'Select target folder'}
-          initialPath={pickerTarget === 'source' ? sourceRoot : targetRoot}
+          title={pickerTarget === 'source' ? 'Add source folder' : 'Add target folder'}
+          initialPath={null}
           onCancel={() => setPickerTarget(null)}
           onConfirm={(path) => {
-            if (pickerTarget === 'source') setSourceRoot(path)
-            else setTargetRoot(path)
+            const setRoots = pickerTarget === 'source' ? setSourceRoots : setTargetRoots
+            setRoots((prev) => (prev.includes(path) ? prev : [...prev, path]))
             setPickerTarget(null)
           }}
         />
@@ -162,7 +172,7 @@ export function ComparePage() {
       <div className="flex items-center gap-3">
         <button
           onClick={startComparison}
-          disabled={!sourceRoot || !targetRoot || isRunning}
+          disabled={sourceRoots.length === 0 || targetRoots.length === 0 || isRunning}
           className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-neutral-300 dark:bg-neutral-100 dark:text-neutral-900 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-400"
         >
           {isRunning ? 'Comparing…' : 'Start comparison'}
@@ -176,8 +186,8 @@ export function ComparePage() {
           />
           Ignore cache (force full rehash)
         </label>
-        {!sourceRoot || !targetRoot ? (
-          <span className="text-xs text-neutral-500">Select a source and target folder to enable this.</span>
+        {sourceRoots.length === 0 || targetRoots.length === 0 ? (
+          <span className="text-xs text-neutral-500">Select at least one source and target folder to enable this.</span>
         ) : null}
       </div>
 
@@ -195,10 +205,10 @@ export function ComparePage() {
         </div>
       )}
 
-      {files && sourceRoot && (
+      {files && sourceRoots.length > 0 && (
         <div className="flex flex-col gap-4 lg:flex-row">
           <div className="lg:w-80 lg:shrink-0">
-            <SourceTreeView files={files} sourceRoot={sourceRoot} />
+            <SourceTreeView files={files} sourceRoots={sourceRoots} />
           </div>
           <div className="min-w-0 flex-1">
             <ResultsTable files={files} onCopySelected={handleCopySelected} copyProgress={copyProgress} />

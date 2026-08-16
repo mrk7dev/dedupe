@@ -53,8 +53,8 @@ def no_pool(monkeypatch):
 
 def _run(source: Path, target: Path) -> int:
     db.init_db()
-    run_id = compare.create_run(str(source), str(target))
-    compare.run_compare(run_id, str(source), str(target))
+    run_id = compare.create_run([str(source)], [str(target)])
+    compare.run_compare(run_id, [str(source)], [str(target)])
     return run_id
 
 
@@ -120,9 +120,9 @@ def test_ignore_cache_forces_rehash_but_still_refreshes_cache(env, no_pool):
     assert cached_before
 
     db.init_db()
-    run_id_2 = compare.create_run(str(source), str(target))
+    run_id_2 = compare.create_run([str(source)], [str(target)])
     with mock.patch.object(hashing, "partial_hash", wraps=hashing.partial_hash) as partial_spy:
-        compare.run_compare(run_id_2, str(source), str(target), ignore_cache=True)
+        compare.run_compare(run_id_2, [str(source)], [str(target)], ignore_cache=True)
 
     # Cache was ignored on read: hashing ran again despite nothing changing.
     assert partial_spy.call_count > 0
@@ -173,10 +173,10 @@ def test_interrupted_run_persists_partial_progress_for_retry(env, no_pool):
         return real_partial_hash(path, size)
 
     db.init_db()
-    run_id_1 = compare.create_run(str(source), str(target))
+    run_id_1 = compare.create_run([str(source)], [str(target)])
     with mock.patch.object(hashing, "partial_hash", side_effect=flaky_partial_hash):
         with pytest.raises(RuntimeError):
-            compare.run_compare(run_id_1, str(source), str(target))
+            compare.run_compare(run_id_1, [str(source)], [str(target)])
 
     with db.connection() as conn:
         run = conn.execute("SELECT phase FROM compare_runs WHERE id = ?", (run_id_1,)).fetchone()
@@ -188,8 +188,8 @@ def test_interrupted_run_persists_partial_progress_for_retry(env, no_pool):
 
     # Retry with real hashing restored: paths already cached shouldn't be rehashed.
     with mock.patch.object(hashing, "partial_hash", wraps=real_partial_hash) as partial_spy:
-        run_id_2 = compare.create_run(str(source), str(target))
-        compare.run_compare(run_id_2, str(source), str(target))
+        run_id_2 = compare.create_run([str(source)], [str(target)])
+        compare.run_compare(run_id_2, [str(source)], [str(target)])
 
     rehashed_paths = {call.args[0] for call in partial_spy.call_args_list}
     assert cached_paths_after_crash.isdisjoint(rehashed_paths)
@@ -212,9 +212,9 @@ def test_run_compare_errors_clearly_when_target_unreadable(env):
     target.chmod(0o000)
     try:
         db.init_db()
-        run_id = compare.create_run(str(source), str(target))
+        run_id = compare.create_run([str(source)], [str(target)])
         with pytest.raises(PermissionError):
-            compare.run_compare(run_id, str(source), str(target))
+            compare.run_compare(run_id, [str(source)], [str(target)])
 
         with db.connection() as conn:
             run = conn.execute("SELECT phase, error FROM compare_runs WHERE id = ?", (run_id,)).fetchone()
@@ -223,6 +223,30 @@ def test_run_compare_errors_clearly_when_target_unreadable(env):
         assert str(target) in run["error"]
     finally:
         target.chmod(0o755)  # restore so pytest's tmp_path cleanup can remove it
+
+
+def test_multi_root_run_compares_across_all_selected_folders(env):
+    source, target = env["source"], env["target"]
+    source_extra = source.parent / "source_extra"
+    source_extra.mkdir()
+
+    shared = b"identical content" * 500
+    (source / "shared.bin").write_bytes(shared)  # matches target
+    (source_extra / "extra_missing.bin").write_bytes(b"only in second source root" * 100)
+    (target / "shared.bin").write_bytes(shared)
+    (target / "extra.bin").write_bytes(b"only on target" * 100)
+
+    db.init_db()
+    run_id = compare.create_run([str(source), str(source_extra)], [str(target)])
+    compare.run_compare(run_id, [str(source), str(source_extra)], [str(target)])
+
+    with db.connection() as conn:
+        results = compare.get_results(conn, run_id)
+
+    by_name = {r["name"]: r for r in results}
+    assert by_name["shared.bin"]["category"] == "matched"
+    assert by_name["extra_missing.bin"]["category"] == "source_only"
+    assert by_name["extra.bin"]["category"] == "target_only"
 
 
 def test_same_size_different_content_not_matched(env):

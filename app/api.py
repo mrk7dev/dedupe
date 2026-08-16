@@ -4,7 +4,7 @@ from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import actions, browse, compare, compare_copy, config, db, grouping, scanner
 
@@ -94,8 +94,8 @@ def stage(file_id: int, return_to: str = Form("/duplicates")):
 
 
 class CompareStartRequest(BaseModel):
-    source_root: str
-    target_root: str
+    source_roots: list[str] = Field(min_length=1)
+    target_roots: list[str] = Field(min_length=1)
     ignore_cache: bool = False
 
 
@@ -131,12 +131,37 @@ def api_browse(path: str | None = None):
     }
 
 
-def _run_compare_background(run_id: int, source_root: str, target_root: str, ignore_cache: bool = False) -> None:
+def _run_compare_background(
+    run_id: int, source_roots: list[str], target_roots: list[str], ignore_cache: bool = False
+) -> None:
     global _compare_running
     try:
-        compare.run_compare(run_id, source_root, target_root, ignore_cache=ignore_cache)
+        compare.run_compare(run_id, source_roots, target_roots, ignore_cache=ignore_cache)
     finally:
         _compare_running = None
+
+
+def _resolve_roots(raw_roots: list[str], side: str) -> list[Path]:
+    resolved = []
+    for raw in raw_roots:
+        root = Path(raw).resolve()
+        if not root.is_dir():
+            raise HTTPException(400, f"{side} root does not exist: {root}")
+        if not browse.is_under_browse_roots(root):
+            raise HTTPException(403, f"{side} root is outside the configured browse roots: {root}")
+        try:
+            compare.check_readable(root)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
+        resolved.append(root)
+    return resolved
+
+
+def _reject_overlapping_roots(roots: list[Path], side: str) -> None:
+    for i, a in enumerate(roots):
+        for b in roots[i + 1 :]:
+            if a == b or a in b.parents or b in a.parents:
+                raise HTTPException(400, f"{side} folders overlap: {a} and {b}")
 
 
 @app.post("/compare/start")
@@ -145,25 +170,16 @@ def start_compare(body: CompareStartRequest, background_tasks: BackgroundTasks):
     if _compare_running is not None:
         raise HTTPException(409, "a comparison is already running")
 
-    source = Path(body.source_root).resolve()
-    target = Path(body.target_root).resolve()
-    if not source.is_dir():
-        raise HTTPException(400, f"source root does not exist: {source}")
-    if not target.is_dir():
-        raise HTTPException(400, f"target root does not exist: {target}")
-    if not browse.is_under_browse_roots(source):
-        raise HTTPException(403, f"source root is outside the configured browse roots: {source}")
-    if not browse.is_under_browse_roots(target):
-        raise HTTPException(403, f"target root is outside the configured browse roots: {target}")
-    try:
-        compare.check_readable(source)
-        compare.check_readable(target)
-    except PermissionError as exc:
-        raise HTTPException(403, str(exc))
+    sources = _resolve_roots(body.source_roots, "source")
+    targets = _resolve_roots(body.target_roots, "target")
+    _reject_overlapping_roots(sources, "source")
+    _reject_overlapping_roots(targets, "target")
 
-    run_id = compare.create_run(str(source), str(target))
+    source_strs = [str(p) for p in sources]
+    target_strs = [str(p) for p in targets]
+    run_id = compare.create_run(source_strs, target_strs)
     _compare_running = run_id
-    background_tasks.add_task(_run_compare_background, run_id, str(source), str(target), body.ignore_cache)
+    background_tasks.add_task(_run_compare_background, run_id, source_strs, target_strs, body.ignore_cache)
     return {"run_id": run_id}
 
 

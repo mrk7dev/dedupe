@@ -71,25 +71,27 @@ class WalkedFile:
     mtime: float
 
 
-def _count_files(root: str) -> int:
+def _count_files(roots: list[str]) -> int:
     total = 0
-    for dirpath, dirnames, filenames in os.walk(root, onerror=_log_walk_error, followlinks=False):
-        dirnames[:] = [d for d in dirnames if d not in config.EXCLUDE_DIRS]
-        total += len(filenames)
+    for root in roots:
+        for dirpath, dirnames, filenames in os.walk(root, onerror=_log_walk_error, followlinks=False):
+            dirnames[:] = [d for d in dirnames if d not in config.EXCLUDE_DIRS]
+            total += len(filenames)
     return total
 
 
-def _walk_side(root: str, side: str) -> list[WalkedFile]:
+def _walk_side(roots: list[str], side: str) -> list[WalkedFile]:
     found: list[WalkedFile] = []
-    for dirpath, dirnames, filenames in os.walk(root, onerror=_log_walk_error, followlinks=False):
-        dirnames[:] = [d for d in dirnames if d not in config.EXCLUDE_DIRS]
-        for name in filenames:
-            full_path = os.path.join(dirpath, name)
-            try:
-                st = os.stat(full_path)
-            except OSError:
-                continue
-            found.append(WalkedFile(side, dirpath, name, full_path, st.st_size, st.st_mtime))
+    for root in roots:
+        for dirpath, dirnames, filenames in os.walk(root, onerror=_log_walk_error, followlinks=False):
+            dirnames[:] = [d for d in dirnames if d not in config.EXCLUDE_DIRS]
+            for name in filenames:
+                full_path = os.path.join(dirpath, name)
+                try:
+                    st = os.stat(full_path)
+                except OSError:
+                    continue
+                found.append(WalkedFile(side, dirpath, name, full_path, st.st_size, st.st_mtime))
     return found
 
 
@@ -109,26 +111,26 @@ def _full_hash_task(args: tuple[int, str]) -> tuple[int, str | None]:
     return row_id, hashing.full_hash(path)
 
 
-def create_run(source_root: str, target_root: str) -> int:
+def create_run(source_roots: list[str], target_roots: list[str]) -> int:
     with db.connection() as conn:
         cur = conn.execute(
             "INSERT INTO compare_runs (source_root, target_root, phase, started_at) VALUES (?, ?, 'counting', ?)",
-            (source_root, target_root, _now()),
+            (",".join(source_roots), ",".join(target_roots), _now()),
         )
         return cur.lastrowid
 
 
-def run_compare(run_id: int, source_root: str, target_root: str, ignore_cache: bool = False) -> None:
+def run_compare(run_id: int, source_roots: list[str], target_roots: list[str], ignore_cache: bool = False) -> None:
     try:
-        check_readable(source_root)
-        check_readable(target_root)
-        total = _count_files(source_root) + _count_files(target_root)
+        for root in (*source_roots, *target_roots):
+            check_readable(root)
+        total = _count_files(source_roots) + _count_files(target_roots)
         with db.connection() as conn:
             _set_progress(conn, run_id, phase="scanning", files_total=total, files_done=0)
 
         walked: list[WalkedFile] = []
-        for root, side in ((source_root, "source"), (target_root, "target")):
-            side_files = _walk_side(root, side)
+        for roots, side in ((source_roots, "source"), (target_roots, "target")):
+            side_files = _walk_side(roots, side)
             walked.extend(side_files)
             with db.connection() as conn:
                 _set_progress(conn, run_id, files_done=len(walked))

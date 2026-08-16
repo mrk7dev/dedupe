@@ -29,14 +29,14 @@ function FileRow({ node, style }: NodeRendererProps<TreeNode>) {
 
 interface SourceTreeViewProps {
   files: CompareFile[]
-  sourceRoot: string
+  sourceRoots: string[]
 }
 
-export function SourceTreeView({ files, sourceRoot }: SourceTreeViewProps) {
+export function SourceTreeView({ files, sourceRoots }: SourceTreeViewProps) {
   const [missingOnly, setMissingOnly] = useState(true)
   const [collapsed, setCollapsed] = useState(false)
   const treeRef = useRef<TreeApi<TreeNode> | undefined>(undefined)
-  const data = useMemo(() => buildSourceTree(files, sourceRoot, missingOnly), [files, sourceRoot, missingOnly])
+  const data = useMemo(() => buildSourceTree(files, sourceRoots, missingOnly), [files, sourceRoots, missingOnly])
 
   return (
     <div className="rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">

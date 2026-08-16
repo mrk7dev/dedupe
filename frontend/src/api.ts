@@ -81,10 +81,10 @@ export function browseChildren(path: string): Promise<BrowseEntry[]> {
 }
 
 // POST /compare/start — kicks off a comparison run, returns its id.
-export function startCompare(sourceRoot: string, targetRoot: string, ignoreCache = false): Promise<number> {
+export function startCompare(sourceRoots: string[], targetRoots: string[], ignoreCache = false): Promise<number> {
   return postJSON<StartCompareResponse>('/compare/start', {
-    source_root: sourceRoot,
-    target_root: targetRoot,
+    source_roots: sourceRoots,
+    target_roots: targetRoots,
     ignore_cache: ignoreCache,
   }).then((r) => r.run_id)
 }

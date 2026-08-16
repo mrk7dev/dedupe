@@ -23,7 +23,7 @@ def test_compare_start_succeeds_when_both_roots_in_browse_roots(client):
     c, paths = client
     res = c.post(
         "/compare/start",
-        json={"source_root": str(paths["source"]), "target_root": str(paths["target"])},
+        json={"source_roots": [str(paths["source"])], "target_roots": [str(paths["target"])]},
     )
     assert res.status_code == 200
     assert "run_id" in res.json()
@@ -35,7 +35,7 @@ def test_compare_start_rejects_root_outside_browse_roots(client):
     outside.mkdir()
     res = c.post(
         "/compare/start",
-        json={"source_root": str(outside), "target_root": str(paths["target"])},
+        json={"source_roots": [str(outside)], "target_roots": [str(paths["target"])]},
     )
     assert res.status_code == 403
 
@@ -51,7 +51,7 @@ def test_compare_start_rejects_unreadable_target(client):
     try:
         res = c.post(
             "/compare/start",
-            json={"source_root": str(paths["source"]), "target_root": str(paths["target"])},
+            json={"source_roots": [str(paths["source"])], "target_roots": [str(paths["target"])]},
         )
         assert res.status_code == 403
         assert str(paths["target"]) in res.json()["detail"]
@@ -64,14 +64,14 @@ def test_compare_start_forwards_ignore_cache(client, monkeypatch):
 
     calls = []
 
-    def fake_run_compare_background(run_id, source_root, target_root, ignore_cache=False):
+    def fake_run_compare_background(run_id, source_roots, target_roots, ignore_cache=False):
         calls.append(ignore_cache)
         api_module._compare_running = None  # mirrors the real function's finally block
 
     monkeypatch.setattr(api_module, "_run_compare_background", fake_run_compare_background)
 
     c, paths = client
-    body = {"source_root": str(paths["source"]), "target_root": str(paths["target"])}
+    body = {"source_roots": [str(paths["source"])], "target_roots": [str(paths["target"])]}
 
     res = c.post("/compare/start", json={**body, "ignore_cache": True})
     assert res.status_code == 200
@@ -87,6 +87,47 @@ def test_compare_start_rejects_nonexistent_root(client):
     missing = paths["tmp_path"] / "does-not-exist"
     res = c.post(
         "/compare/start",
-        json={"source_root": str(missing), "target_root": str(paths["target"])},
+        json={"source_roots": [str(missing)], "target_roots": [str(paths["target"])]},
     )
     assert res.status_code == 400
+
+
+def test_compare_start_accepts_multiple_roots_per_side(client):
+    c, paths = client
+    source_a = paths["source"] / "a"
+    source_b = paths["source"] / "b"
+    source_a.mkdir()
+    source_b.mkdir()
+    res = c.post(
+        "/compare/start",
+        json={
+            "source_roots": [str(source_a), str(source_b)],
+            "target_roots": [str(paths["target"])],
+        },
+    )
+    assert res.status_code == 200
+    assert "run_id" in res.json()
+
+
+def test_compare_start_rejects_overlapping_source_roots(client):
+    c, paths = client
+    nested = paths["source"] / "nested"
+    nested.mkdir()
+    res = c.post(
+        "/compare/start",
+        json={
+            "source_roots": [str(paths["source"]), str(nested)],
+            "target_roots": [str(paths["target"])],
+        },
+    )
+    assert res.status_code == 400
+    assert "overlap" in res.json()["detail"]
+
+
+def test_compare_start_rejects_empty_root_list(client):
+    c, paths = client
+    res = c.post(
+        "/compare/start",
+        json={"source_roots": [], "target_roots": [str(paths["target"])]},
+    )
+    assert res.status_code == 422

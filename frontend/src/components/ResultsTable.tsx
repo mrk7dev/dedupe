@@ -11,7 +11,7 @@ import type { CompareFile, CopyProgress } from '../types'
 import { formatBytes } from '../format'
 import { CollapseToggle } from './CollapseToggle'
 
-type FilterMode = 'missing' | 'all'
+type FilterMode = 'missing_target' | 'missing_source' | 'all'
 
 const CATEGORY_LABEL: Record<CompareFile['category'], string> = {
   matched: 'On both',
@@ -34,7 +34,7 @@ interface ResultsTableProps {
 }
 
 export function ResultsTable({ files, onCopySelected, copyProgress }: ResultsTableProps) {
-  const [filterMode, setFilterMode] = useState<FilterMode>('missing')
+  const [filterMode, setFilterMode] = useState<FilterMode>('missing_target')
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
   const [collapsed, setCollapsed] = useState(false)
   const isCopying = copyProgress !== null && copyProgress.done < copyProgress.total
@@ -48,10 +48,11 @@ export function ResultsTable({ files, onCopySelected, copyProgress }: ResultsTab
     [files],
   )
 
-  const visibleFiles = useMemo(
-    () => (filterMode === 'missing' ? files.filter((f) => f.category === 'source_only') : files),
-    [files, filterMode],
-  )
+  const visibleFiles = useMemo(() => {
+    if (filterMode === 'missing_target') return files.filter((f) => f.category === 'source_only')
+    if (filterMode === 'missing_source') return files.filter((f) => f.category === 'target_only')
+    return files
+  }, [files, filterMode])
 
   const columns = useMemo(
     () => [
@@ -149,15 +150,26 @@ export function ResultsTable({ files, onCopySelected, copyProgress }: ResultsTab
           <CollapseToggle collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} label="results" />
           <div className="flex gap-1.5">
             <button
-              onClick={() => setFilterMode('missing')}
+              onClick={() => setFilterMode('missing_target')}
               disabled={isCopying}
               className={`rounded-full px-3 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-60 ${
-                filterMode === 'missing'
+                filterMode === 'missing_target'
                   ? 'bg-amber-500 text-white'
                   : 'border border-neutral-300 text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800'
               }`}
             >
               Missing from target ({counts.source_only})
+            </button>
+            <button
+              onClick={() => setFilterMode('missing_source')}
+              disabled={isCopying}
+              className={`rounded-full px-3 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-60 ${
+                filterMode === 'missing_source'
+                  ? 'bg-sky-500 text-white'
+                  : 'border border-neutral-300 text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800'
+              }`}
+            >
+              Missing from source ({counts.target_only})
             </button>
             <button
               onClick={() => setFilterMode('all')}
