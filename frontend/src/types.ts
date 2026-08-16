@@ -10,7 +10,7 @@ export interface TreeNode {
   hasChildren?: boolean // set on folder-picker nodes; children loaded lazily on expand
 }
 
-export type ComparePhase = 'idle' | 'counting' | 'scanning' | 'hashing' | 'ready' | 'error'
+export type ComparePhase = 'idle' | 'counting' | 'scanning' | 'hashing' | 'ready' | 'error' | 'cancelled'
 
 export interface CompareProgress {
   phase: ComparePhase

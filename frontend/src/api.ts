@@ -21,6 +21,9 @@ interface CompareStatusResponse {
   filesTotal: number
   filesDone: number
   error: string | null
+  sourceRoots: string[]
+  targetRoots: string[]
+  startedAt: string
 }
 
 interface CompareResultsResponse {
@@ -109,4 +112,9 @@ export function startCopy(runId: number, fileIds: number[]): Promise<void> {
 // GET /compare/{id}/copy/status — poll while a copy is running.
 export function getCopyStatus(runId: number): Promise<CopyStatusResponse> {
   return getJSON<CopyStatusResponse>(`/compare/${runId}/copy/status`)
+}
+
+// POST /compare/{id}/stop — request cancellation of a running comparison.
+export function stopCompare(runId: number): Promise<void> {
+  return postJSON<{ status: string }>(`/compare/${runId}/stop`, {}).then(() => undefined)
 }

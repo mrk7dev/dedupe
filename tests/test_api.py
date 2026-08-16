@@ -131,3 +131,49 @@ def test_compare_start_rejects_empty_root_list(client):
         json={"source_roots": [], "target_roots": [str(paths["target"])]},
     )
     assert res.status_code == 422
+
+
+def test_compare_status_includes_roots_and_started_at(client):
+    c, paths = client
+    body = {"source_roots": [str(paths["source"])], "target_roots": [str(paths["target"])]}
+    run_id = c.post("/compare/start", json=body).json()["run_id"]
+
+    res = c.get(f"/compare/{run_id}/status")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["sourceRoots"] == [str(paths["source"])]
+    assert data["targetRoots"] == [str(paths["target"])]
+    assert data["startedAt"]
+
+
+def test_stop_rejects_when_no_run_active(client):
+    c, paths = client
+    body = {"source_roots": [str(paths["source"])], "target_roots": [str(paths["target"])]}
+    # TestClient runs BackgroundTasks synchronously before returning, so by
+    # the time /compare/start responds, the run has already finished and
+    # _compare_running has already been reset — same reasoning already
+    # relied on by test_compare_start_forwards_ignore_cache above.
+    run_id = c.post("/compare/start", json=body).json()["run_id"]
+
+    res = c.post(f"/compare/{run_id}/stop")
+    assert res.status_code == 409
+
+
+def test_stop_signals_cancellation_for_the_active_run(client, monkeypatch):
+    import app.api as api_module
+
+    def fake_run_compare_background(run_id, source_roots, target_roots, ignore_cache=False):
+        pass  # deliberately doesn't clear _compare_running, simulating an in-flight run
+
+    monkeypatch.setattr(api_module, "_run_compare_background", fake_run_compare_background)
+
+    requested = []
+    monkeypatch.setattr(api_module.compare, "request_cancel", lambda run_id: requested.append(run_id))
+
+    c, paths = client
+    body = {"source_roots": [str(paths["source"])], "target_roots": [str(paths["target"])]}
+    run_id = c.post("/compare/start", json=body).json()["run_id"]
+
+    res = c.post(f"/compare/{run_id}/stop")
+    assert res.status_code == 200
+    assert requested == [run_id]

@@ -45,6 +45,9 @@ class FakeExecutor:
     def map(self, fn, tasks, chunksize=None):
         return map(fn, tasks)
 
+    def shutdown(self, wait=True, cancel_futures=False):
+        pass
+
 
 @pytest.fixture
 def no_pool(monkeypatch):
@@ -197,6 +200,39 @@ def test_interrupted_run_persists_partial_progress_for_retry(env, no_pool):
     with db.connection() as conn:
         run2 = conn.execute("SELECT phase FROM compare_runs WHERE id = ?", (run_id_2,)).fetchone()
     assert run2["phase"] == "ready"
+
+
+def test_stop_cancels_a_running_comparison(env, no_pool):
+    source, target = env["source"], env["target"]
+    n = 130
+    for i in range(n):
+        content = f"file-{i}-".encode().ljust(1000, b"x")
+        (source / f"s{i}.bin").write_bytes(content)
+        (target / f"t{i}.bin").write_bytes(content)
+
+    real_partial_hash = hashing.partial_hash
+    call_count = {"n": 0}
+    run_id_holder = {}
+
+    def cancelling_partial_hash(path, size):
+        call_count["n"] += 1
+        if call_count["n"] == 60:
+            compare.request_cancel(run_id_holder["id"])
+        return real_partial_hash(path, size)
+
+    db.init_db()
+    run_id = compare.create_run([str(source)], [str(target)])
+    run_id_holder["id"] = run_id
+    with mock.patch.object(hashing, "partial_hash", side_effect=cancelling_partial_hash):
+        compare.run_compare(run_id, [str(source)], [str(target)])  # returns normally, doesn't raise
+
+    with db.connection() as conn:
+        run = conn.execute(
+            "SELECT phase, files_done, files_total FROM compare_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+    assert run["phase"] == "cancelled"
+    assert run["files_done"] < run["files_total"]
+    assert run_id not in compare._cancel_events  # registry entry cleaned up
 
 
 def test_run_compare_errors_clearly_when_target_unreadable(env):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import threading
 from collections import defaultdict
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
@@ -12,6 +13,27 @@ from datetime import datetime, timezone
 from . import config, db, hashing
 
 logger = logging.getLogger(__name__)
+
+
+class RunCancelled(Exception):
+    """Raised internally to unwind a run whose stop was requested via
+    request_cancel(). Caught in run_compare and treated as a deliberate
+    outcome (phase='cancelled'), not an error.
+    """
+
+
+# Registry of in-flight runs' cancel signals, keyed by run_id. Safe as
+# in-process module state: the app runs a single uvicorn worker process
+# (app/cli.py's uvicorn.run has no workers= arg), and BackgroundTasks for a
+# sync function run in that same process's thread pool — same assumption the
+# existing `_compare_running` global in app/api.py already relies on.
+_cancel_events: dict[int, threading.Event] = {}
+
+
+def request_cancel(run_id: int) -> None:
+    event = _cancel_events.get(run_id)
+    if event is not None:
+        event.set()
 
 
 def _now() -> str:
@@ -72,7 +94,7 @@ class WalkedFile:
     mtime: float
 
 
-def _iter_entries(root: str) -> Iterator[tuple[str, os.DirEntry]]:
+def _iter_entries(root: str, cancel_event: threading.Event) -> Iterator[tuple[str, os.DirEntry]]:
     """Single recursive scandir walk, replacing the old separate count+walk
     passes (which each re-listed every directory) and os.walk's own separate
     per-file os.stat() call. Yields (dirpath, DirEntry) so callers can use
@@ -82,6 +104,8 @@ def _iter_entries(root: str) -> Iterator[tuple[str, os.DirEntry]]:
     """
     stack = [root]
     while stack:
+        if cancel_event.is_set():
+            raise RunCancelled()
         dirpath = stack.pop()
         try:
             entries = os.scandir(dirpath)
@@ -102,10 +126,10 @@ def _iter_entries(root: str) -> Iterator[tuple[str, os.DirEntry]]:
                     yield dirpath, entry
 
 
-def _walk_side(roots: list[str], side: str) -> list[WalkedFile]:
+def _walk_side(roots: list[str], side: str, cancel_event: threading.Event) -> list[WalkedFile]:
     found: list[WalkedFile] = []
     for root in roots:
-        for dirpath, entry in _iter_entries(root):
+        for dirpath, entry in _iter_entries(root, cancel_event):
             try:
                 st = entry.stat()
             except OSError:
@@ -140,6 +164,8 @@ def create_run(source_roots: list[str], target_roots: list[str]) -> int:
 
 
 def run_compare(run_id: int, source_roots: list[str], target_roots: list[str], ignore_cache: bool = False) -> None:
+    cancel_event = threading.Event()
+    _cancel_events[run_id] = cancel_event
     try:
         for root in (*source_roots, *target_roots):
             check_readable(root)
@@ -148,7 +174,7 @@ def run_compare(run_id: int, source_roots: list[str], target_roots: list[str], i
 
         walked: list[WalkedFile] = []
         for roots, side in ((source_roots, "source"), (target_roots, "target")):
-            side_files = _walk_side(roots, side)
+            side_files = _walk_side(roots, side, cancel_event)
             walked.extend(side_files)
             with db.connection() as conn:
                 _set_progress(conn, run_id, files_done=len(walked))
@@ -171,8 +197,13 @@ def run_compare(run_id: int, source_roots: list[str], target_roots: list[str], i
 
         with db.connection() as conn:
             _set_progress(conn, run_id, phase="hashing", files_total=len(walked), files_done=0)
-            _hash_and_categorize(conn, run_id, ignore_cache=ignore_cache)
+            _hash_and_categorize(conn, run_id, cancel_event, ignore_cache=ignore_cache)
             _set_progress(conn, run_id, phase="ready", files_done=len(walked))
+            conn.execute("UPDATE compare_runs SET finished_at = ? WHERE id = ?", (_now(), run_id))
+            conn.commit()
+    except RunCancelled:
+        with db.connection() as conn:
+            _set_progress(conn, run_id, phase="cancelled")
             conn.execute("UPDATE compare_runs SET finished_at = ? WHERE id = ?", (_now(), run_id))
             conn.commit()
     except Exception as exc:
@@ -181,9 +212,13 @@ def run_compare(run_id: int, source_roots: list[str], target_roots: list[str], i
             conn.execute("UPDATE compare_runs SET finished_at = ? WHERE id = ?", (_now(), run_id))
             conn.commit()
         raise
+    finally:
+        _cancel_events.pop(run_id, None)
 
 
-def _hash_and_categorize(conn: sqlite3.Connection, run_id: int, ignore_cache: bool = False) -> None:
+def _hash_and_categorize(
+    conn: sqlite3.Connection, run_id: int, cancel_event: threading.Event, ignore_cache: bool = False
+) -> None:
     """Staged size -> partial-hash -> full-hash matching, mirroring the
     single-volume pipeline: only files whose size (then partial hash) is
     ambiguous across sides need the next, more expensive stage.
@@ -222,25 +257,38 @@ def _hash_and_categorize(conn: sqlite3.Connection, run_id: int, ignore_cache: bo
         results: dict[int, str | None] = {}
         pending: list[dict] = []
         with ProcessPoolExecutor(max_workers=config.WORKERS) as pool:
-            for row_id, value in pool.map(task_fn, tasks, chunksize=32):
-                results[row_id] = value
-                done += 1
-                if value is not None:
-                    r = rows_by_id[row_id]
-                    pending.append(
-                        {
-                            "path": r["path"], "size": r["size"], "mtime": r["mtime"],
-                            "partial_hash": value if hash_field == "partial_hash" else None,
-                            "full_hash": value if hash_field == "full_hash" else None,
-                            "updated_at": _now(),
-                        }
-                    )
-                if done % 50 == 0:
-                    _set_progress(conn, run_id, files_done=done)
-                    if pending:
-                        conn.executemany(CACHE_UPSERT_SQL, pending)
-                        conn.commit()
-                        pending = []
+            try:
+                for row_id, value in pool.map(task_fn, tasks, chunksize=32):
+                    results[row_id] = value
+                    done += 1
+                    if value is not None:
+                        r = rows_by_id[row_id]
+                        pending.append(
+                            {
+                                "path": r["path"], "size": r["size"], "mtime": r["mtime"],
+                                "partial_hash": value if hash_field == "partial_hash" else None,
+                                "full_hash": value if hash_field == "full_hash" else None,
+                                "updated_at": _now(),
+                            }
+                        )
+                    if done % 50 == 0:
+                        _set_progress(conn, run_id, files_done=done)
+                        if pending:
+                            conn.executemany(CACHE_UPSERT_SQL, pending)
+                            conn.commit()
+                            pending = []
+                    if cancel_event.is_set():
+                        # Drop any chunk not yet picked up by a worker; chunks
+                        # already dispatched (bounded by WORKERS * chunksize)
+                        # finish naturally since a running task can't be
+                        # interrupted mid-flight — stop is prompt, not instant.
+                        pool.shutdown(wait=False, cancel_futures=True)
+                        raise RunCancelled()
+            except RunCancelled:
+                if pending:
+                    conn.executemany(CACHE_UPSERT_SQL, pending)
+                    conn.commit()
+                raise
         if pending:
             conn.executemany(CACHE_UPSERT_SQL, pending)
             conn.commit()

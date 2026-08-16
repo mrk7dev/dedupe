@@ -194,7 +194,18 @@ def compare_status(run_id: int):
         "filesTotal": row["files_total"],
         "filesDone": row["files_done"],
         "error": row["error"],
+        "sourceRoots": row["source_root"].split(","),
+        "targetRoots": row["target_root"].split(","),
+        "startedAt": row["started_at"],
     }
+
+
+@app.post("/compare/{run_id}/stop")
+def stop_compare(run_id: int):
+    if _compare_running != run_id:
+        raise HTTPException(409, "run is not currently active")
+    compare.request_cancel(run_id)
+    return {"status": "stopping"}
 
 
 @app.get("/compare/{run_id}/results")
