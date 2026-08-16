@@ -108,6 +108,33 @@ def test_repeat_run_skips_rehashing_unchanged_files(env, no_pool):
     assert results_1 == results_2
 
 
+def test_ignore_cache_forces_rehash_but_still_refreshes_cache(env, no_pool):
+    source, target = env["source"], env["target"]
+    shared = b"identical content" * 500
+    (source / "shared.bin").write_bytes(shared)
+    (target / "shared_renamed.bin").write_bytes(shared)
+
+    _run(source, target)
+    with db.connection() as conn:
+        cached_before = {row["path"]: row["updated_at"] for row in conn.execute("SELECT path, updated_at FROM hash_cache")}
+    assert cached_before
+
+    db.init_db()
+    run_id_2 = compare.create_run(str(source), str(target))
+    with mock.patch.object(hashing, "partial_hash", wraps=hashing.partial_hash) as partial_spy:
+        compare.run_compare(run_id_2, str(source), str(target), ignore_cache=True)
+
+    # Cache was ignored on read: hashing ran again despite nothing changing.
+    assert partial_spy.call_count > 0
+
+    # But the cache was still refreshed (write-back happens regardless).
+    with db.connection() as conn:
+        cached_after = {row["path"]: row["updated_at"] for row in conn.execute("SELECT path, updated_at FROM hash_cache")}
+        results = {r["name"]: r["category"] for r in compare.get_results(conn, run_id_2)}
+    assert set(cached_after) == set(cached_before)
+    assert results["shared.bin"] == "matched"
+
+
 def test_mtime_touch_invalidates_cache_and_forces_rehash(env, no_pool):
     source, target = env["source"], env["target"]
     shared = b"identical content" * 500

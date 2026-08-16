@@ -27,6 +27,13 @@ interface CompareResultsResponse {
   files: CompareFile[]
 }
 
+export interface VersionInfo {
+  version: string
+  commit: string
+  dirty: boolean
+  builtAt: string | null
+}
+
 export type CopyPhase = 'running' | 'done' | 'error' | null
 
 export interface CopyStatusResponse {
@@ -58,6 +65,11 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
   return (await res.json()) as T
 }
 
+// GET /api/version — build info of whatever's currently deployed.
+export function getVersion(): Promise<VersionInfo> {
+  return getJSON<VersionInfo>('/api/version')
+}
+
 // GET /api/browse (no path) — the configured top-level mounts.
 export function browseRoots(): Promise<BrowseEntry[]> {
   return getJSON<BrowseResponse>('/api/browse').then((r) => r.entries)
@@ -69,10 +81,12 @@ export function browseChildren(path: string): Promise<BrowseEntry[]> {
 }
 
 // POST /compare/start — kicks off a comparison run, returns its id.
-export function startCompare(sourceRoot: string, targetRoot: string): Promise<number> {
-  return postJSON<StartCompareResponse>('/compare/start', { source_root: sourceRoot, target_root: targetRoot }).then(
-    (r) => r.run_id,
-  )
+export function startCompare(sourceRoot: string, targetRoot: string, ignoreCache = false): Promise<number> {
+  return postJSON<StartCompareResponse>('/compare/start', {
+    source_root: sourceRoot,
+    target_root: targetRoot,
+    ignore_cache: ignoreCache,
+  }).then((r) => r.run_id)
 }
 
 // GET /compare/{id}/status — poll while a comparison is running.

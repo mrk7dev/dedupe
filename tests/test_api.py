@@ -59,6 +59,29 @@ def test_compare_start_rejects_unreadable_target(client):
         paths["target"].chmod(0o755)
 
 
+def test_compare_start_forwards_ignore_cache(client, monkeypatch):
+    import app.api as api_module
+
+    calls = []
+
+    def fake_run_compare_background(run_id, source_root, target_root, ignore_cache=False):
+        calls.append(ignore_cache)
+        api_module._compare_running = None  # mirrors the real function's finally block
+
+    monkeypatch.setattr(api_module, "_run_compare_background", fake_run_compare_background)
+
+    c, paths = client
+    body = {"source_root": str(paths["source"]), "target_root": str(paths["target"])}
+
+    res = c.post("/compare/start", json={**body, "ignore_cache": True})
+    assert res.status_code == 200
+
+    res = c.post("/compare/start", json=body)  # omitted — should default to False
+    assert res.status_code == 200
+
+    assert calls == [True, False]
+
+
 def test_compare_start_rejects_nonexistent_root(client):
     c, paths = client
     missing = paths["tmp_path"] / "does-not-exist"

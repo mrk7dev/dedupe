@@ -17,6 +17,7 @@ export function ComparePage() {
   const [targetRoot, setTargetRoot] = useState<string | null>(null)
   const [pickerTarget, setPickerTarget] = useState<PickerTarget>(null)
   const [runId, setRunId] = useState<number | null>(null)
+  const [ignoreCache, setIgnoreCache] = useState(false)
   const [progress, setProgress] = useState<CompareProgress>(IDLE_PROGRESS)
   const [files, setFiles] = useState<CompareFile[] | null>(null)
   const [copyNotice, setCopyNotice] = useState<string | null>(null)
@@ -50,7 +51,7 @@ export function ComparePage() {
 
     let id: number
     try {
-      id = await startCompare(sourceRoot, targetRoot)
+      id = await startCompare(sourceRoot, targetRoot, ignoreCache)
     } catch (err) {
       setProgress(IDLE_PROGRESS)
       setError(errMsg(err))
@@ -166,6 +167,15 @@ export function ComparePage() {
         >
           {isRunning ? 'Comparing…' : 'Start comparison'}
         </button>
+        <label className="flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-400">
+          <input
+            type="checkbox"
+            checked={ignoreCache}
+            onChange={(e) => setIgnoreCache(e.target.checked)}
+            disabled={isRunning}
+          />
+          Ignore cache (force full rehash)
+        </label>
         {!sourceRoot || !targetRoot ? (
           <span className="text-xs text-neutral-500">Select a source and target folder to enable this.</span>
         ) : null}

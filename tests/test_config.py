@@ -1,6 +1,16 @@
 from app import config
 
 
+def test_read_text_returns_stripped_contents(tmp_path):
+    f = tmp_path / "value.txt"
+    f.write_text("  abc123  \n")
+    assert config._read_text(f) == "abc123"
+
+
+def test_read_text_returns_none_for_missing_path(tmp_path):
+    assert config._read_text(tmp_path / "does-not-exist") is None
+
+
 def test_discover_browse_roots_only_existing_candidates(tmp_path):
     vol1 = tmp_path / "volume1"
     vol2 = tmp_path / "volume2"
@@ -28,3 +38,12 @@ def test_default_volume_candidates_shape():
     candidates = config._default_volume_candidates()
     assert "/volume1" in candidates
     assert "/volumeUSB1" in candidates
+
+
+def test_version_info_degrades_gracefully_outside_docker():
+    # /app/GIT_SHA etc. only exist inside the built Docker image (baked in by
+    # the Dockerfile) — locally these should fall back cleanly, not raise.
+    assert config.GIT_COMMIT == "unknown"
+    assert config.GIT_DIRTY is False
+    assert config.BUILT_AT is None
+    assert config.APP_VERSION  # non-empty, from importlib.metadata or "unknown"

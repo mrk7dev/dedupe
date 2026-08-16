@@ -1,5 +1,13 @@
+import importlib.metadata
 import os
 from pathlib import Path
+
+
+def _read_text(path: Path) -> str | None:
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return None
 
 
 def _split_paths(value: str) -> list[Path]:
@@ -71,3 +79,18 @@ def discover_browse_roots(candidates: list[str] | None = None, extra: str = "") 
 
 
 BROWSE_ROOTS = discover_browse_roots(extra=os.environ.get("BROWSE_ROOTS", ""))
+
+# --- Deployed-version info ---
+# No CI/registry/tagging pipeline — just `git pull` + `docker compose build`
+# on the NAS directly — so the git commit the image was built from (baked in
+# by the Dockerfile) is a far more reliable "what's actually running" signal
+# than pyproject.toml's version field, which drifts unbumped between releases.
+
+try:
+    APP_VERSION = importlib.metadata.version("dedupe")
+except importlib.metadata.PackageNotFoundError:
+    APP_VERSION = "unknown"
+
+GIT_COMMIT = _read_text(Path("/app/GIT_SHA")) or "unknown"
+GIT_DIRTY = (_read_text(Path("/app/GIT_DIRTY")) or "false") == "true"
+BUILT_AT = _read_text(Path("/app/BUILT_AT"))  # None outside Docker (local dev)

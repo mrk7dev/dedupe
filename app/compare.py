@@ -118,7 +118,7 @@ def create_run(source_root: str, target_root: str) -> int:
         return cur.lastrowid
 
 
-def run_compare(run_id: int, source_root: str, target_root: str) -> None:
+def run_compare(run_id: int, source_root: str, target_root: str, ignore_cache: bool = False) -> None:
     try:
         check_readable(source_root)
         check_readable(target_root)
@@ -151,7 +151,7 @@ def run_compare(run_id: int, source_root: str, target_root: str) -> None:
 
         with db.connection() as conn:
             _set_progress(conn, run_id, phase="hashing", files_total=len(walked), files_done=0)
-            _hash_and_categorize(conn, run_id)
+            _hash_and_categorize(conn, run_id, ignore_cache=ignore_cache)
             _set_progress(conn, run_id, phase="ready", files_done=len(walked))
             conn.execute("UPDATE compare_runs SET finished_at = ? WHERE id = ?", (_now(), run_id))
             conn.commit()
@@ -163,7 +163,7 @@ def run_compare(run_id: int, source_root: str, target_root: str) -> None:
         raise
 
 
-def _hash_and_categorize(conn: sqlite3.Connection, run_id: int) -> None:
+def _hash_and_categorize(conn: sqlite3.Connection, run_id: int, ignore_cache: bool = False) -> None:
     """Staged size -> partial-hash -> full-hash matching, mirroring the
     single-volume pipeline: only files whose size (then partial hash) is
     ambiguous across sides need the next, more expensive stage.
@@ -227,7 +227,7 @@ def _hash_and_categorize(conn: sqlite3.Connection, run_id: int) -> None:
         return results
 
     if ambiguous:
-        cache = _load_hash_cache(conn)
+        cache = {} if ignore_cache else _load_hash_cache(conn)
 
         def _cache_hit(r: sqlite3.Row, field: str) -> str | None:
             c = cache.get(r["path"])

@@ -96,10 +96,21 @@ def stage(file_id: int, return_to: str = Form("/duplicates")):
 class CompareStartRequest(BaseModel):
     source_root: str
     target_root: str
+    ignore_cache: bool = False
 
 
 class CopyRequest(BaseModel):
     file_ids: list[int]
+
+
+@app.get("/api/version")
+def api_version():
+    return {
+        "version": config.APP_VERSION,
+        "commit": config.GIT_COMMIT,
+        "dirty": config.GIT_DIRTY,
+        "builtAt": config.BUILT_AT,
+    }
 
 
 @app.get("/api/browse")
@@ -120,10 +131,10 @@ def api_browse(path: str | None = None):
     }
 
 
-def _run_compare_background(run_id: int, source_root: str, target_root: str) -> None:
+def _run_compare_background(run_id: int, source_root: str, target_root: str, ignore_cache: bool = False) -> None:
     global _compare_running
     try:
-        compare.run_compare(run_id, source_root, target_root)
+        compare.run_compare(run_id, source_root, target_root, ignore_cache=ignore_cache)
     finally:
         _compare_running = None
 
@@ -152,7 +163,7 @@ def start_compare(body: CompareStartRequest, background_tasks: BackgroundTasks):
 
     run_id = compare.create_run(str(source), str(target))
     _compare_running = run_id
-    background_tasks.add_task(_run_compare_background, run_id, str(source), str(target))
+    background_tasks.add_task(_run_compare_background, run_id, str(source), str(target), body.ignore_cache)
     return {"run_id": run_id}
 
 
