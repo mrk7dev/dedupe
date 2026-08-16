@@ -1,8 +1,10 @@
+import os
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
-from app import compare, compare_copy, config, db
+from app import compare, compare_copy, config, db, hashing
 
 
 @pytest.fixture
@@ -18,6 +20,35 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "BROWSE_ROOTS", [source.resolve(), target.resolve()])
 
     return {"source": source, "target": target}
+
+
+class FakeExecutor:
+    """Runs pool.map's tasks synchronously in-process instead of spawning
+    real workers. ProcessPoolExecutor's start method is `spawn` on macOS
+    (this dev machine) vs `fork` on Linux (the Docker deploy target) —
+    `spawn` re-imports modules fresh in worker processes, so monkeypatching
+    hashing.partial_hash/full_hash in the test process would be invisible to
+    real spawned workers. Patching compare.ProcessPoolExecutor to this fake
+    keeps hashing calls in-process and therefore mockable/countable,
+    regardless of platform.
+    """
+
+    def __init__(self, *a, **kw):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def map(self, fn, tasks, chunksize=None):
+        return map(fn, tasks)
+
+
+@pytest.fixture
+def no_pool(monkeypatch):
+    monkeypatch.setattr(compare, "ProcessPoolExecutor", FakeExecutor)
 
 
 def _run(source: Path, target: Path) -> int:
@@ -52,6 +83,93 @@ def test_matched_source_only_target_only_categorized(env):
     assert by_name["extra.bin"]["category"] == "target_only"
     # matched content shows once (source side), not duplicated for the target copy
     assert "shared_renamed.bin" not in by_name
+
+
+def test_repeat_run_skips_rehashing_unchanged_files(env, no_pool):
+    source, target = env["source"], env["target"]
+    shared = b"identical content" * 500
+    (source / "shared.bin").write_bytes(shared)
+    (target / "shared_renamed.bin").write_bytes(shared)
+
+    run_id_1 = _run(source, target)
+    with db.connection() as conn:
+        results_1 = {r["name"]: r["category"] for r in compare.get_results(conn, run_id_1)}
+
+    with mock.patch.object(hashing, "partial_hash", wraps=hashing.partial_hash) as partial_spy, mock.patch.object(
+        hashing, "full_hash", wraps=hashing.full_hash
+    ) as full_spy:
+        run_id_2 = _run(source, target)
+
+    assert partial_spy.call_count == 0
+    assert full_spy.call_count == 0
+
+    with db.connection() as conn:
+        results_2 = {r["name"]: r["category"] for r in compare.get_results(conn, run_id_2)}
+    assert results_1 == results_2
+
+
+def test_mtime_touch_invalidates_cache_and_forces_rehash(env, no_pool):
+    source, target = env["source"], env["target"]
+    shared = b"identical content" * 500
+    source_file = source / "shared.bin"
+    source_file.write_bytes(shared)
+    (target / "shared_renamed.bin").write_bytes(shared)
+
+    _run(source, target)
+    os.utime(source_file, None)
+
+    with mock.patch.object(hashing, "partial_hash", wraps=hashing.partial_hash) as partial_spy:
+        run_id_2 = _run(source, target)
+
+    assert partial_spy.call_count > 0
+
+    with db.connection() as conn:
+        results = {r["name"]: r["category"] for r in compare.get_results(conn, run_id_2)}
+    assert results["shared.bin"] == "matched"
+
+
+def test_interrupted_run_persists_partial_progress_for_retry(env, no_pool):
+    source, target = env["source"], env["target"]
+    n = 130
+    for i in range(n):
+        content = f"file-{i}-".encode().ljust(1000, b"x")
+        (source / f"s{i}.bin").write_bytes(content)
+        (target / f"t{i}.bin").write_bytes(content)
+
+    real_partial_hash = hashing.partial_hash
+    call_count = {"n": 0}
+
+    def flaky_partial_hash(path, size):
+        call_count["n"] += 1
+        if call_count["n"] > 60:
+            raise RuntimeError("simulated crash")
+        return real_partial_hash(path, size)
+
+    db.init_db()
+    run_id_1 = compare.create_run(str(source), str(target))
+    with mock.patch.object(hashing, "partial_hash", side_effect=flaky_partial_hash):
+        with pytest.raises(RuntimeError):
+            compare.run_compare(run_id_1, str(source), str(target))
+
+    with db.connection() as conn:
+        run = conn.execute("SELECT phase FROM compare_runs WHERE id = ?", (run_id_1,)).fetchone()
+        assert run["phase"] == "error"
+        cached_paths_after_crash = {row["path"] for row in conn.execute("SELECT path FROM hash_cache").fetchall()}
+
+    # Partial progress persisted (via the periodic mid-run flush), but not everything.
+    assert 0 < len(cached_paths_after_crash) < n
+
+    # Retry with real hashing restored: paths already cached shouldn't be rehashed.
+    with mock.patch.object(hashing, "partial_hash", wraps=real_partial_hash) as partial_spy:
+        run_id_2 = compare.create_run(str(source), str(target))
+        compare.run_compare(run_id_2, str(source), str(target))
+
+    rehashed_paths = {call.args[0] for call in partial_spy.call_args_list}
+    assert cached_paths_after_crash.isdisjoint(rehashed_paths)
+
+    with db.connection() as conn:
+        run2 = conn.execute("SELECT phase FROM compare_runs WHERE id = ?", (run_id_2,)).fetchone()
+    assert run2["phase"] == "ready"
 
 
 def test_run_compare_errors_clearly_when_target_unreadable(env):

@@ -70,6 +70,15 @@ CREATE TABLE IF NOT EXISTS compare_files (
 CREATE INDEX IF NOT EXISTS idx_compare_files_run ON compare_files(run_id);
 CREATE INDEX IF NOT EXISTS idx_compare_files_run_category ON compare_files(run_id, category);
 
+CREATE TABLE IF NOT EXISTS hash_cache (
+    path TEXT PRIMARY KEY,
+    size INTEGER NOT NULL,
+    mtime REAL NOT NULL,
+    partial_hash TEXT,
+    full_hash TEXT,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS copy_actions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id INTEGER NOT NULL REFERENCES compare_runs(id) ON DELETE CASCADE,

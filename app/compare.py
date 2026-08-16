@@ -17,6 +17,29 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+CACHE_UPSERT_SQL = """
+INSERT INTO hash_cache (path, size, mtime, partial_hash, full_hash, updated_at)
+VALUES (:path, :size, :mtime, :partial_hash, :full_hash, :updated_at)
+ON CONFLICT(path) DO UPDATE SET
+    size = excluded.size,
+    mtime = excluded.mtime,
+    partial_hash = CASE
+        WHEN excluded.partial_hash IS NOT NULL THEN excluded.partial_hash
+        WHEN hash_cache.size = excluded.size AND hash_cache.mtime = excluded.mtime THEN hash_cache.partial_hash
+        ELSE NULL END,
+    full_hash = CASE
+        WHEN excluded.full_hash IS NOT NULL THEN excluded.full_hash
+        WHEN hash_cache.size = excluded.size AND hash_cache.mtime = excluded.mtime THEN hash_cache.full_hash
+        ELSE NULL END,
+    updated_at = excluded.updated_at
+"""
+
+
+def _load_hash_cache(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
+    rows = conn.execute("SELECT path, size, mtime, partial_hash, full_hash FROM hash_cache").fetchall()
+    return {r["path"]: r for r in rows}
+
+
 def check_readable(root: str) -> None:
     """os.walk silently skips any directory it can't scandir — including the
     root itself — instead of raising. Without this check, a target root the
@@ -146,10 +169,11 @@ def _hash_and_categorize(conn: sqlite3.Connection, run_id: int) -> None:
     ambiguous across sides need the next, more expensive stage.
     """
     rows = conn.execute(
-        "SELECT id, side, path, size FROM compare_files WHERE run_id = ?", (run_id,)
+        "SELECT id, side, path, size, mtime FROM compare_files WHERE run_id = ?", (run_id,)
     ).fetchall()
     if not rows:
         return
+    rows_by_id = {r["id"]: r for r in rows}
 
     resolved: dict[int, str] = {}
     done = 0
@@ -173,19 +197,60 @@ def _hash_and_categorize(conn: sqlite3.Connection, run_id: int) -> None:
     if done:
         _set_progress(conn, run_id, files_done=done)
 
-    def _run_pool(task_fn, tasks) -> dict[int, str | None]:
+    def _run_pool(task_fn, tasks, hash_field: str) -> dict[int, str | None]:
         nonlocal done
         results: dict[int, str | None] = {}
+        pending: list[dict] = []
         with ProcessPoolExecutor(max_workers=config.WORKERS) as pool:
             for row_id, value in pool.map(task_fn, tasks, chunksize=32):
                 results[row_id] = value
                 done += 1
+                if value is not None:
+                    r = rows_by_id[row_id]
+                    pending.append(
+                        {
+                            "path": r["path"], "size": r["size"], "mtime": r["mtime"],
+                            "partial_hash": value if hash_field == "partial_hash" else None,
+                            "full_hash": value if hash_field == "full_hash" else None,
+                            "updated_at": _now(),
+                        }
+                    )
                 if done % 50 == 0:
                     _set_progress(conn, run_id, files_done=done)
+                    if pending:
+                        conn.executemany(CACHE_UPSERT_SQL, pending)
+                        conn.commit()
+                        pending = []
+        if pending:
+            conn.executemany(CACHE_UPSERT_SQL, pending)
+            conn.commit()
         return results
 
     if ambiguous:
-        partial_by_id = _run_pool(_partial_hash_task, [(r["id"], r["path"], r["size"]) for r in ambiguous])
+        cache = _load_hash_cache(conn)
+
+        def _cache_hit(r: sqlite3.Row, field: str) -> str | None:
+            c = cache.get(r["path"])
+            if c is not None and c["size"] == r["size"] and c["mtime"] == r["mtime"] and c[field] is not None:
+                return c[field]
+            return None
+
+        partial_by_id: dict[int, str | None] = {}
+        need_partial: list[sqlite3.Row] = []
+        for r in ambiguous:
+            hit = _cache_hit(r, "partial_hash")
+            if hit is not None:
+                partial_by_id[r["id"]] = hit
+            else:
+                need_partial.append(r)
+        cache_hits = len(ambiguous) - len(need_partial)
+        if cache_hits:
+            done += cache_hits
+            _set_progress(conn, run_id, files_done=done)
+        if need_partial:
+            partial_by_id.update(
+                _run_pool(_partial_hash_task, [(r["id"], r["path"], r["size"]) for r in need_partial], "partial_hash")
+            )
 
         by_size_partial: dict[tuple[int, str], list[sqlite3.Row]] = defaultdict(list)
         for r in ambiguous:
@@ -203,7 +268,22 @@ def _hash_and_categorize(conn: sqlite3.Connection, run_id: int) -> None:
                 need_full.extend(group)
 
         if need_full:
-            full_by_id = _run_pool(_full_hash_task, [(r["id"], r["path"]) for r in need_full])
+            full_by_id: dict[int, str | None] = {}
+            need_full_compute: list[sqlite3.Row] = []
+            for r in need_full:
+                hit = _cache_hit(r, "full_hash")
+                if hit is not None:
+                    full_by_id[r["id"]] = hit
+                else:
+                    need_full_compute.append(r)
+            full_cache_hits = len(need_full) - len(need_full_compute)
+            if full_cache_hits:
+                done += full_cache_hits
+                _set_progress(conn, run_id, files_done=done)
+            if need_full_compute:
+                full_by_id.update(
+                    _run_pool(_full_hash_task, [(r["id"], r["path"]) for r in need_full_compute], "full_hash")
+                )
 
             by_size_full: dict[tuple[int, str], list[sqlite3.Row]] = defaultdict(list)
             for r in need_full:

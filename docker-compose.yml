@@ -46,6 +46,18 @@ services:
       # filters dot-prefixed entries out of the picker.
       - /volume1/docker/.dedupe/config:/config
       - /volume1/docker/.dedupe/staging:/staging
+    # The container's uid 1000 isn't mapped to any Synology DSM user/group,
+    # so Synology's NFSv4-style folder ACLs (visible via `synoacltool -get`,
+    # distinct from and taking precedence over the legacy rwxrwxrwx bits
+    # `ls -l` shows) deny it access even when those legacy bits look wide
+    # open. Adding uid 1000 to a DSM group that already has an ACL grant
+    # (e.g. the host's `docker` group, if you've granted it folder access
+    # via synoacltool or the DSM permission UI) sidesteps needing an
+    # explicit ACL entry for an arbitrary/unmapped uid. Find the GID with
+    # `grep docker /etc/group` on the NAS — it's host-specific, not the
+    # value below.
+    group_add:
+      - "65538"
     deploy:
       resources:
         limits:
