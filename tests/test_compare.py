@@ -88,6 +88,25 @@ def test_matched_source_only_target_only_categorized(env):
     assert "shared_renamed.bin" not in by_name
 
 
+def test_files_done_matches_files_total_when_ready(env):
+    # Regression: a row needing full-hash confirmation (which every genuine
+    # match does — matching content always shares a partial hash too) was
+    # counted once during partial-hash and again during full-hash, while
+    # files_total only ever counted it once. On a run with many real
+    # duplicates this pushed files_done to nearly double files_total.
+    source, target = env["source"], env["target"]
+    shared = b"identical content" * 500
+    (source / "shared.bin").write_bytes(shared)
+    (target / "shared_renamed.bin").write_bytes(shared)
+
+    run_id = _run(source, target)
+    with db.connection() as conn:
+        run = conn.execute(
+            "SELECT files_done, files_total FROM compare_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+    assert run["files_done"] == run["files_total"]
+
+
 def test_repeat_run_skips_rehashing_unchanged_files(env, no_pool):
     source, target = env["source"], env["target"]
     shared = b"identical content" * 500

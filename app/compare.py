@@ -211,8 +211,14 @@ def run_compare(run_id: int, source_roots: list[str], target_roots: list[str], i
 
         with db.connection() as conn:
             _set_progress(conn, run_id, phase="hashing", files_total=len(walked), files_done=0)
-            _hash_and_categorize(conn, run_id, cancel_event, ignore_cache=ignore_cache)
-            _set_progress(conn, run_id, phase="ready", files_done=len(walked))
+            final_total = _hash_and_categorize(conn, run_id, cancel_event, ignore_cache=ignore_cache)
+            # files_total may have grown past len(walked) if any rows needed
+            # full-hash confirmation (a second pass) — reconcile files_done
+            # against that same final total, not the original walk count,
+            # and re-assert it explicitly since _run_pool only checkpoints
+            # files_done every 50 rows, so the last partial batch might not
+            # have been flushed yet.
+            _set_progress(conn, run_id, phase="ready", files_total=final_total, files_done=final_total)
             conn.execute("UPDATE compare_runs SET finished_at = ? WHERE id = ?", (_now(), run_id))
             conn.commit()
     except RunCancelled:
@@ -233,17 +239,22 @@ def run_compare(run_id: int, source_roots: list[str], target_roots: list[str], i
 
 def _hash_and_categorize(
     conn: sqlite3.Connection, run_id: int, cancel_event: threading.Event, ignore_cache: bool = False
-) -> None:
+) -> int:
     """Staged size -> partial-hash -> full-hash matching, mirroring the
     single-volume pipeline: only files whose size (then partial hash) is
     ambiguous across sides need the next, more expensive stage.
+
+    Returns the true total work count — normally len(rows), but grown by
+    len(need_full) below if any rows needed full-hash confirmation, since
+    those get processed (and counted into files_done) twice.
     """
     rows = conn.execute(
         "SELECT id, side, path, size, mtime FROM compare_files WHERE run_id = ?", (run_id,)
     ).fetchall()
     if not rows:
-        return
+        return 0
     rows_by_id = {r["id"]: r for r in rows}
+    total = len(rows)
 
     resolved: dict[int, str] = {}
     done = 0
@@ -352,6 +363,16 @@ def _hash_and_categorize(
                 need_full.extend(group)
 
         if need_full:
+            # Rows needing full-hash confirmation get processed twice — once
+            # during partial-hash (already reflected in files_done above),
+            # again here — so files_total must grow to match, or files_done
+            # runs past it. Every real match takes this path (a genuine
+            # content match always shares a partial hash too, so it can only
+            # be confirmed by reading the whole file), so on a run with many
+            # duplicates this could otherwise put files_done at nearly double
+            # files_total.
+            total += len(need_full)
+            _set_progress(conn, run_id, files_total=total)
             full_by_id: dict[int, str | None] = {}
             need_full_compute: list[sqlite3.Row] = []
             for r in need_full:
@@ -390,6 +411,7 @@ def _hash_and_categorize(
         [(cat, row_id) for row_id, cat in resolved.items()],
     )
     conn.commit()
+    return total
 
 
 def get_results(conn: sqlite3.Connection, run_id: int) -> list[dict]:
